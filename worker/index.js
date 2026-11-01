@@ -1,5 +1,6 @@
 const encoder = new TextEncoder()
-const PASSWORD_ITERATIONS = 210_000
+// Cloudflare Workers supports PBKDF2 iteration counts up to 100,000.
+const PASSWORD_ITERATIONS = 100_000
 const SESSION_TTL_MS = 1000 * 60 * 60 * 24 * 30
 const AUTH_WINDOW_MS = 1000 * 60 * 15
 const AUTH_ATTEMPT_LIMIT = 10
@@ -20,20 +21,20 @@ export default {
     if (!originAllowed(request, env)) return json({ error: 'This browser origin is not allowed.' }, 403, request, env)
 
     try {
-      if (request.method === 'GET' && url.pathname === '/api/status') return getStatus(request, env)
-      if (request.method === 'POST' && url.pathname === '/api/setup') return setupHousehold(request, env, ctx)
-      if (request.method === 'POST' && url.pathname === '/api/join') return joinHousehold(request, env, ctx)
-      if (request.method === 'POST' && url.pathname === '/api/login') return login(request, env, ctx)
+      if (request.method === 'GET' && url.pathname === '/api/status') return await getStatus(request, env)
+      if (request.method === 'POST' && url.pathname === '/api/setup') return await setupHousehold(request, env, ctx)
+      if (request.method === 'POST' && url.pathname === '/api/join') return await joinHousehold(request, env, ctx)
+      if (request.method === 'POST' && url.pathname === '/api/login') return await login(request, env, ctx)
 
       const auth = await authenticate(request, env)
       if (!auth) return json({ error: 'Please sign in again.' }, 401, request, env)
 
       if (request.method === 'GET' && url.pathname === '/api/session') return json(sessionPayload(auth), 200, request, env)
-      if (request.method === 'POST' && url.pathname === '/api/logout') return logout(request, env, auth)
-      if (request.method === 'GET' && url.pathname === '/api/data') return getData(request, env, auth)
+      if (request.method === 'POST' && url.pathname === '/api/logout') return await logout(request, env, auth)
+      if (request.method === 'GET' && url.pathname === '/api/data') return await getData(request, env, auth)
       if (request.method === 'PUT' && url.pathname.startsWith('/api/data/')) {
         const section = decodeURIComponent(url.pathname.slice('/api/data/'.length))
-        return saveSection(request, env, auth, section)
+        return await saveSection(request, env, auth, section)
       }
       return json({ error: 'Not found.' }, 404, request, env)
     } catch (error) {
