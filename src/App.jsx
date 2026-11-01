@@ -8,10 +8,17 @@ import {
 import { effortOptions, seededData } from './data'
 
 const NAV_ITEMS = [
-  ['today', 'Today', Sun], ['weekend', 'Weekend', Sparkles], ['calendar', 'Calendar', CalendarDays],
-  ['home', 'Home', Home], ['pets', 'Pets', PawPrint], ['goals', 'Goals', Goal],
-  ['inbox', 'Inbox', Inbox], ['settings', 'Settings', Settings],
+  ['today', 'Today', Sun], ['plan', 'Plan', ClipboardList], ['pets', 'Pets', PawPrint], ['home', 'Home', Home],
 ]
+
+const PLAN_SECTIONS = [
+  ['plan', 'Overview', ClipboardList, 'See every planning tool in one place.'],
+  ['weekend', 'Weekend', Sparkles, 'Choose a realistic amount of household work.'],
+  ['calendar', 'Upcoming', CalendarDays, 'Review shared time and preparation.'],
+  ['goals', 'Goals', Goal, 'Turn longer-term ideas into next actions.'],
+  ['inbox', 'Inbox', Inbox, 'Organize thoughts captured for later.'],
+]
+const PLAN_VIEWS = new Set(PLAN_SECTIONS.map(([id]) => id))
 
 const uid = (prefix = 'item') => `${prefix}-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`
 const titleCase = (value = '') => value.charAt(0).toUpperCase() + value.slice(1)
@@ -132,6 +139,7 @@ function App({ cloud = null, remoteData = null, remoteRevision = 0, onDataChange
   const navProps = { data, update, setModal, notify, completeTask, claimTask, deleteTask, navigate, setDisplayMode, cloud }
   const views = {
     today: <TodayView {...navProps} />,
+    plan: <PlanView {...navProps} />,
     weekend: <WeekendView {...navProps} />,
     calendar: <CalendarView {...navProps} />,
     home: <HomeView {...navProps} />,
@@ -146,9 +154,13 @@ function App({ cloud = null, remoteData = null, remoteRevision = 0, onDataChange
     <aside className={`sidebar ${mobileNav ? 'open' : ''}`}>
       <div className="brand"><span className="brand-mark"><Flame size={21} /></span><div><strong>{data.brandName}</strong><small>Home, held together</small></div></div>
       <nav aria-label="Primary navigation">
-        {NAV_ITEMS.map(([id, label, Icon]) => <button key={id} className={view === id ? 'active' : ''} onClick={() => navigate(id)}><Icon size={19} /><span>{label}</span>{id === 'inbox' && data.inbox.some(i => i.status === 'unorganized') && <i>{data.inbox.filter(i => i.status === 'unorganized').length}</i>}</button>)}
+        {NAV_ITEMS.map(([id, label, Icon]) => <button key={id} className={view === id || (id === 'plan' && PLAN_VIEWS.has(view)) ? 'active' : ''} onClick={() => navigate(id)}><Icon size={19} /><span>{label}</span>{id === 'plan' && data.inbox.some(i => i.status === 'unorganized') && <i>{data.inbox.filter(i => i.status === 'unorganized').length}</i>}</button>)}
       </nav>
+      {PLAN_VIEWS.has(view) && <nav className="plan-subnav" aria-label="Plan sections">
+        {PLAN_SECTIONS.map(([id, label]) => <button key={id} className={view === id ? 'active' : ''} onClick={() => navigate(id)}>{label}{id === 'inbox' && data.inbox.some(i => i.status === 'unorganized') && <i>{data.inbox.filter(i => i.status === 'unorganized').length}</i>}</button>)}
+      </nav>}
       <div className="sidebar-footer">
+        <button className={`account-control ${view === 'settings' ? 'active' : ''}`} onClick={() => navigate('settings')} aria-label="Open household settings"><UserRound size={18} /><span><strong>{cloud?.user?.display_name || data.adults[0]}</strong><small>Account & settings</small></span><Settings size={16} /></button>
         <p><Users size={16} /> {data.adults.join(' + ')}</p>
         {cloud ? <small className={`sync-pill ${cloud.status}`}><span />{cloud.status === 'saving' ? 'Saving changes…' : cloud.status === 'synced' ? 'Live & shared' : cloud.status === 'offline' ? 'Working offline' : 'Connecting…'}</small> : <small>Saved on this device</small>}
       </div>
@@ -169,6 +181,26 @@ function App({ cloud = null, remoteData = null, remoteRevision = 0, onDataChange
 
 function PageHeader({ eyebrow, title, description, actions }) {
   return <header className="page-header"><div><span className="eyebrow">{eyebrow}</span><h1>{title}</h1>{description && <p>{description}</p>}</div>{actions && <div className="page-actions">{actions}</div>}</header>
+}
+
+function PlanView({ data, navigate }) {
+  const counts = {
+    weekend: data.tasks.filter(task => task.status !== 'complete' && task.date === 'Weekend').length,
+    calendar: data.events.length,
+    goals: data.goals.filter(goal => goal.status === 'active').length,
+    inbox: data.inbox.filter(item => item.status === 'unorganized').length,
+  }
+  return <div className="page plan-page">
+    <PageHeader eyebrow="Household plan" title="One place to look ahead" description="Weekend work, upcoming commitments, longer-term goals, and captured thoughts stay together here while Hearthline moves toward one simpler plan." />
+    <div className="plan-overview-grid">
+      {PLAN_SECTIONS.slice(1).map(([id, label, Icon, description]) => <button key={id} className="plan-overview-card" onClick={() => navigate(id)}>
+        <span className="plan-overview-icon"><Icon size={22} /></span>
+        <span><strong>{label}</strong><small>{description}</small></span>
+        <span className="plan-overview-count">{counts[id]}</span>
+        <ArrowRight size={18} />
+      </button>)}
+    </div>
+  </div>
 }
 
 function TodayView({ data, update, setModal, completeTask, navigate }) {
@@ -344,7 +376,7 @@ function PetsView({ data, update, notify }) {
   return <div className="page"><PageHeader eyebrow="Pet care" title="Everyone’s care, close at hand" description="Medication, appointments, supplies, and useful notes — with human confirmation where it matters." />
     <div className="pet-tabs">{data.pets.map(p => <button key={p.id} className={selected === p.id ? 'active' : ''} onClick={() => { setSelected(p.id); setEditing(false) }}><span className={`pet-avatar ${p.color}`}>{p.initials}</span><div><strong>{p.name}</strong><small>{p.species}</small></div></button>)}</div>
     <div className="pet-profile"><aside className={`pet-portrait ${pet.color}`}><div className="pet-silhouette">{pet.species === 'Dog' ? <Dog size={88} strokeWidth={1.2} /> : <PawPrint size={76} strokeWidth={1.2} />}</div><div><h2>{pet.name}</h2><p>{pet.species}</p></div><Button variant="light" icon={Edit3} onClick={() => setEditing(true)}>Edit profile</Button></aside>
-      {editing ? <form className="pet-content" onSubmit={save}><div className="form-grid"><label>Name<input name="name" defaultValue={pet.name} required /></label><label>Species<input name="species" defaultValue={pet.species} /></label><label className="span-2">Medication schedule<input name="medication" defaultValue={pet.medication} /></label><label>Veterinarian<input name="vet" defaultValue={pet.vet} /></label><label>Vet phone<input name="vetPhone" defaultValue={pet.vetPhone} /></label><label className="span-2">Care notes<textarea name="notes" defaultValue={pet.notes} rows="3" /></label><label>Upcoming appointments<input name="appointment" defaultValue={pet.appointment} /></label><label>Supply reminders<input name="supplies" defaultValue={pet.supplies} /></label><div className="form-actions span-2"><Button type="button" variant="outline" onClick={() => setEditing(false)}>Cancel</Button><Button type="submit">Save profile</Button></div></div></form> : <div className="pet-content"><section className="pet-highlight"><span className="pet-highlight-icon"><HeartPulse /></span><div><span className="eyebrow">Medication</span><h3>{pet.medication}</h3><p>{pet.medication.includes('No current') ? 'No medication confirmation needed.' : 'Morning and evening doses appear in Today.'}</p></div></section><div className="pet-info-grid"><section><span className="mini-icon"><ClipboardList /></span><div><span>Care notes</span><p>{pet.notes}</p></div></section><section><span className="mini-icon"><CalendarDays /></span><div><span>Upcoming appointment</span><p>{pet.appointment}</p></div></section><section><span className="mini-icon"><Archive /></span><div><span>Supply reminder</span><p>{pet.supplies}</p></div></section><section><span className="mini-icon"><HeartPulse /></span><div><span>Veterinarian</span><p>{pet.vet}<br />{pet.vetPhone}</p></div></section></div><section className="care-history"><span className="eyebrow">Care history</span>{pet.history.map(item => <p key={item}><span /><>{item}</></p>)}</section></div>}
+      {editing ? <form className="pet-content" onSubmit={save}><div className="form-grid"><label>Name<input name="name" defaultValue={pet.name} required /></label><label>Species<input name="species" defaultValue={pet.species} /></label><label className="span-2">Medication schedule<input name="medication" defaultValue={pet.medication} /></label><label>Veterinarian<input name="vet" defaultValue={pet.vet} /></label><label>Vet phone<input name="vetPhone" defaultValue={pet.vetPhone} /></label><label className="span-2">Care notes<textarea name="notes" defaultValue={pet.notes} rows="3" /></label><label>Upcoming appointments<input name="appointment" defaultValue={pet.appointment} /></label><label>Supply reminders<input name="supplies" defaultValue={pet.supplies} /></label><div className="form-actions span-2"><Button type="button" variant="outline" onClick={() => setEditing(false)}>Cancel</Button><Button type="submit">Save profile</Button></div></div></form> : <div className="pet-content"><section className="pet-highlight"><span className="pet-highlight-icon"><HeartPulse /></span><div><span className="eyebrow">Medication</span><h3>{pet.medication}</h3><p>{pet.medication.includes('No current') ? 'No medication confirmation needed.' : 'Morning and evening doses appear in Today.'}</p></div></section><div className="pet-info-grid"><section><span className="mini-icon"><ClipboardList /></span><div><span>Care notes</span><p>{pet.notes}</p></div></section><section><span className="mini-icon"><CalendarDays /></span><div><span>Upcoming appointment</span><p>{pet.appointment}</p></div></section><section><span className="mini-icon"><Archive /></span><div><span>Supply reminder</span><p>{pet.supplies}</p></div></section><section><span className="mini-icon"><HeartPulse /></span><div><span>Veterinarian</span><p>{pet.vet}<br />{pet.vetPhone}</p></div></section></div></div>}
     </div>
   </div>
 }
