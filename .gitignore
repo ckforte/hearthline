@@ -1,0 +1,12 @@
+node_modules/
+dist/
+.qa-*/
+qa-*.png
+.DS_Store
+*.local
+.wrangler/
+.dev.vars
+.setup-code.local
+cloudflare-authorization.png
+github-new-repository.png
+
