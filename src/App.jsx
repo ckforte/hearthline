@@ -204,29 +204,30 @@ function PlanView({ data, navigate }) {
 }
 
 function TodayView({ data, update, setModal, completeTask, navigate }) {
-  const todayTasks = data.tasks.filter(t => t.status !== 'complete' && (t.date === 'Today' || t.timeSensitive)).slice(0, 4)
-  const upcoming = [...data.events].sort((a, b) => a.date.localeCompare(b.date))[0]
-  const routinesCovered = Object.values(data.routines).every(r => r.items.every(i => i.status === 'given'))
+  const priorityOrder = { must: 0, should: 1, could: 2 }
+  const importantTasks = [...data.tasks]
+    .filter(task => task.status === 'open' && (task.date === 'Today' || task.timeSensitive))
+    .sort((a, b) => Number(Boolean(b.timeSensitive)) - Number(Boolean(a.timeSensitive)) || (priorityOrder[a.priority] ?? 3) - (priorityOrder[b.priority] ?? 3))
+    .slice(0, 3)
+  const openRoutines = Object.entries(data.routines).filter(([, routine]) => routine.items.some(item => item.status !== 'given'))
+  const todayKey = new Date().toISOString().slice(0, 10)
+  const upcoming = [...data.events].filter(event => event.date >= todayKey).sort((a, b) => a.date.localeCompare(b.date) || a.time.localeCompare(b.time))[0]
   return <div className="page today-page">
-    <PageHeader eyebrow={friendlyDate()} title="Good morning" description={routinesCovered ? 'Everything important is covered.' : `${todayTasks.length + 2} things are gently in view today.`} actions={<Button variant="soft" icon={Plus} onClick={() => setModal({ type: 'task' })}>Add item</Button>} />
-    <section className={`status-banner ${routinesCovered ? 'covered' : ''}`}>
-      <span className="status-icon">{routinesCovered ? <ShieldCheck /> : <Sun />}</span>
-      <div><strong>{routinesCovered ? 'Everything important is covered' : 'The day is in hand'}</strong><p>{routinesCovered ? 'Both care routines are confirmed. You can settle in.' : 'Pet care and one time-sensitive errand need attention. The rest can wait.'}</p></div>
-    </section>
+    <PageHeader eyebrow={friendlyDate()} title="What matters today" description="Care, a few important actions, and the next commitment—everything else can wait in Plan." actions={<Button variant="soft" icon={Plus} onClick={() => setModal({ type: 'task' })}>Add item</Button>} />
     <div className="today-grid">
-      <section className="stack-card routines-panel"><div className="section-heading"><div><span className="eyebrow">Daily care</span><h2>Pet routines</h2></div><PawPrint size={21} /></div>
-        <RoutineCard period="morning" routine={data.routines.morning} update={update} />
-        <RoutineCard period="evening" routine={data.routines.evening} update={update} />
+      <section className="stack-card routines-panel"><div className="section-heading"><div><span className="eyebrow">Due care</span><h2>Pet routines</h2></div><PawPrint size={21} /></div>
+        {openRoutines.length ? openRoutines.map(([period, routine]) => <RoutineCard key={period} period={period} routine={routine} update={update} />) : <EmptyState icon={ShieldCheck} title="Pet care is covered" text="Nothing else needs confirmation right now." />}
       </section>
-      <section className="stack-card"><div className="section-heading"><div><span className="eyebrow">Needs attention</span><h2>Today</h2></div><Clock3 size={21} /></div>
+      <section className="stack-card"><div className="section-heading"><div><span className="eyebrow">Up next</span><h2>Important actions</h2></div><Clock3 size={21} /></div>
         <div className="task-list compact">
-          {todayTasks.map(task => <div className="today-task" key={task.id}><button className={`check-control ${task.status === 'complete' ? 'done' : ''}`} onClick={() => completeTask(task.id)} aria-label={`Complete ${task.title}`}><Check size={16} /></button><div><strong>{task.title}</strong><p>{task.explanation}</p><span>{task.dueWindow} · {task.minutes} min</span></div><IconButton label="Edit task" onClick={() => setModal({ type: 'task', task })}><MoreHorizontal size={19} /></IconButton></div>)}
+          {importantTasks.map(task => <div className="today-task" key={task.id}><div><strong>{task.title}</strong><p>{task.explanation}</p><span>{task.dueWindow} · {task.minutes} min</span></div><div className="today-task-actions"><Button variant="soft" icon={Check} onClick={() => completeTask(task.id)}>Complete</Button><IconButton label={`Edit ${task.title}`} onClick={() => setModal({ type: 'task', task })}><MoreHorizontal size={19} /></IconButton></div></div>)}
+          {!importantTasks.length && <EmptyState title="Today is clear" text="There are no important household actions waiting right now." />}
         </div>
-        <Button variant="text" onClick={() => navigate('weekend')}>See the weekend plan <ArrowRight size={16} /></Button>
+        <Button variant="text" onClick={() => navigate('plan')}>Open Plan <ArrowRight size={16} /></Button>
       </section>
     </div>
     <section className="next-strip">
-      <div className="next-icon"><CalendarDays /></div><div><span className="eyebrow">Coming next</span><h3>{upcoming?.private ? 'Private appointment' : upcoming?.title || 'No appointments scheduled'}</h3><p>{upcoming ? `${shortDate(upcoming.date)} at ${displayClock(upcoming.time)}${upcoming.preparation ? ` · Prepare: ${upcoming.preparation}` : ''}` : 'Your near future is open.'}</p></div><Button variant="outline" onClick={() => navigate('calendar')}>Calendar</Button>
+      <div className="next-icon"><CalendarDays /></div><div><span className="eyebrow">Next commitment</span><h3>{upcoming?.private ? 'Private appointment' : upcoming?.title || 'Nothing upcoming'}</h3><p>{upcoming ? `${shortDate(upcoming.date)} at ${displayClock(upcoming.time)}${upcoming.preparation ? ` · Prepare: ${upcoming.preparation}` : ''}` : 'The near future is open.'}</p></div><Button variant="outline" onClick={() => navigate('calendar')}>View upcoming</Button>
     </section>
   </div>
 }
