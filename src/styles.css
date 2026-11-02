@@ -325,6 +325,7 @@ p { line-height: 1.55; }
 .pet-avatar.sage, .pet-portrait.sage { background: #668677; }.pet-avatar.clay, .pet-portrait.clay { background: #a57862; }.pet-avatar.gold, .pet-portrait.gold { background: #b68c4e; }.pet-avatar.blue, .pet-portrait.blue { background: #5f7d86; }
 .pet-tabs strong, .pet-tabs small { display: block; }.pet-tabs strong { font-size: 12px; }.pet-tabs small { margin-top: 2px; color: var(--muted); font-size: 9px; }
 .pet-profile { display: grid; grid-template-columns: 290px 1fr; min-height: 500px; border: 1px solid var(--line); border-radius: 21px; background: var(--paper); overflow: hidden; }
+.pet-create { margin-bottom: 18px; padding: 24px; }
 .pet-portrait { position: relative; display: flex; flex-direction: column; align-items: center; justify-content: flex-end; padding: 30px; color: white; text-align: center; overflow: hidden; }
 .pet-portrait:before { content: ''; position: absolute; width: 260px; height: 260px; top: -50px; right: -80px; border: 1px solid rgba(255,255,255,.16); border-radius: 50%; }
 .pet-silhouette { position: absolute; top: 72px; left: 50%; transform: translateX(-50%); width: 150px; height: 150px; display: grid; place-items: center; border: 1px solid rgba(255,255,255,.24); border-radius: 50%; background: rgba(255,255,255,.1); }
@@ -391,7 +392,9 @@ p { line-height: 1.55; }
 .gate-tabs button.active { background: white; color: var(--ink); box-shadow: 0 2px 7px rgba(35,45,38,.08); }
 .gate-card form { display: flex; flex-direction: column; gap: 13px; }
 .gate-card form label { color: #586760; font-size: 11px; font-weight: 700; }
+.optional-label { color: #89958f; font-size: 9px; font-weight: 500; }
 .gate-card form input { margin-top: 6px; }
+.household-gate { max-height: calc(100vh - 36px); overflow-y: auto; }
 .gate-submit { width: 100%; min-height: 45px; display: flex; align-items: center; justify-content: center; gap: 8px; margin-top: 4px; border: 0; border-radius: 11px; background: var(--forest); color: white; font-size: 12px; font-weight: 800; }
 .gate-submit svg { width: 17px; }
 .gate-submit:disabled { opacity: .65; }

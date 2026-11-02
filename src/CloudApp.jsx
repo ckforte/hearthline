@@ -20,14 +20,17 @@ function SetupScreen({ onAuthenticated }) {
     setBusy(true)
     setMessage('')
     const form = new FormData(event.currentTarget)
+    const displayName = String(form.get('displayName')).trim()
+    const otherAdult = String(form.get('otherAdult')).trim()
+    const petNames = String(form.get('petNames') || '').split(',').map(name => name.trim()).filter(Boolean).slice(0, 8)
     try {
       const result = await hearthlineApi.setup({
         setupToken: String(form.get('setupToken')).trim(),
-        displayName: String(form.get('displayName')).trim(),
+        displayName,
         email: String(form.get('email')).trim(),
         password: String(form.get('password')),
         householdName: String(form.get('householdName')).trim(),
-        initialData: seededData(),
+        initialData: seededData({ adult1: displayName, adult2: otherAdult, petNames, firstTask: form.get('firstTask') }),
       })
       setSessionToken(result.token)
       onAuthenticated(result)
@@ -40,12 +43,15 @@ function SetupScreen({ onAuthenticated }) {
 
   return <GateShell><section className="gate-card household-gate">
     <span className="gate-icon"><Home /></span>
-    <h1>Set up your private household</h1>
-    <p>This happens once. Use the private setup code from your deployment, then choose the account you’ll use for Hearthline.</p>
+    <h1>Make Hearthline yours</h1>
+    <p>Add the people, pets, and first real task that should appear when your household opens. Nothing fictional will be added.</p>
     <form onSubmit={submit}>
       <label>Private setup code<input name="setupToken" autoComplete="one-time-code" required /></label>
-      <label>Your display name<input name="displayName" autoComplete="name" required /></label>
       <label>Household name<input name="householdName" defaultValue="Our home" required /></label>
+      <label>Your name<input name="displayName" autoComplete="name" required /></label>
+      <label>Other household member<input name="otherAdult" autoComplete="name" required /></label>
+      <label>Pet names <span className="optional-label">optional, separated by commas</span><input name="petNames" placeholder="Milo, Luna" /></label>
+      <label>First household task<input name="firstTask" placeholder="Choose one useful next action" required /></label>
       <label>Email<input type="email" name="email" autoComplete="email" required /></label>
       <label>Password<input type="password" name="password" autoComplete="new-password" minLength="10" required /></label>
       {message && <div className="gate-message">{message}</div>}
@@ -87,7 +93,7 @@ function AuthScreen({ joinAvailable, onAuthenticated }) {
   return <GateShell><section className="gate-card">
     <span className="gate-icon">{mode === 'signin' ? <Cloud /> : <KeyRound />}</span>
     <h1>{mode === 'signin' ? 'Welcome home' : 'Join your household'}</h1>
-    <p>{mode === 'signin' ? 'Sign in to open your private, shared home.' : 'Ryan can create the second and final account using the invite code shown in Settings.'}</p>
+    <p>{mode === 'signin' ? 'Sign in to open your private, shared home.' : 'The second person can create the final account using the invite code shown in Settings.'}</p>
     {joinAvailable && <div className="gate-tabs"><button className={mode === 'signin' ? 'active' : ''} onClick={() => { setMode('signin'); setMessage('') }}>Sign in</button><button className={mode === 'join' ? 'active' : ''} onClick={() => { setMode('join'); setMessage('') }}>Join with code</button></div>}
     <form onSubmit={submit}>
       {mode === 'join' && <>
