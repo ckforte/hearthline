@@ -7,7 +7,7 @@ import {
 } from 'lucide-react'
 import { seededData } from './data'
 import { HOUSEHOLD_CACHE_KEY } from './offline'
-import { buildPlanEntries, completeTaskWithRecurrence, confirmRoutine, taskFromForm, updateRoutineItem, upsertTask } from './model'
+import { assignTask, buildPlanEntries, completeTaskWithRecurrence, confirmRoutine, deferTaskToLater, taskFromForm, updateRoutineItem, upsertTask } from './model'
 
 const NAV_ITEMS = [
   ['today', 'Today', Sun], ['plan', 'Plan', ClipboardList], ['pets', 'Pets', PawPrint], ['home', 'Home', Home],
@@ -135,7 +135,11 @@ function App({ cloud = null, remoteData = null, remoteRevision = 0, onDataChange
     update(next => { next.tasks = completeTaskWithRecurrence(next.tasks, taskId, new Date()) })
   }
   const claimTask = (taskId, person) => {
-    update(next => { const task = next.tasks.find(t => t.id === taskId); if (task) task.claimedBy = task.claimedBy === person ? '' : person })
+    update(next => { next.tasks = assignTask(next.tasks, taskId, person) })
+  }
+  const quickDeferTask = (taskId) => {
+    update(next => { next.tasks = deferTaskToLater(next.tasks, taskId) })
+    notify('Moved to Later')
   }
   const deleteTask = (taskId) => update(next => { next.tasks = next.tasks.filter(t => t.id !== taskId) })
   const saveTask = (form, existing) => update(next => {
@@ -146,7 +150,7 @@ function App({ cloud = null, remoteData = null, remoteRevision = 0, onDataChange
     if (target) { target.status = 'deferred'; target.deferReason = reason; target.dueWindow = suggestion; target.date = 'Upcoming' }
   })
 
-  const navProps = { data, update, setModal, notify, completeTask, claimTask, deleteTask, navigate, setDisplayMode, cloud }
+  const navProps = { data, update, setModal, notify, completeTask, claimTask, quickDeferTask, deleteTask, navigate, setDisplayMode, cloud }
   const views = {
     today: <TodayView {...navProps} />,
     plan: <PlanView {...navProps} />,
@@ -191,7 +195,29 @@ function PageHeader({ eyebrow, title, description, actions }) {
   return <header className="page-header"><div><span className="eyebrow">{eyebrow}</span><h1>{title}</h1>{description && <p>{description}</p>}</div>{actions && <div className="page-actions">{actions}</div>}</header>
 }
 
-function PlanView({ data, update, setModal, completeTask, navigate }) {
+function TaskPrimaryActions({ task, adults, currentUser, onComplete, onClaim, onDefer, onEdit, onDelete }) {
+  const [menuOpen, setMenuOpen] = useState(false)
+  const [confirmDelete, setConfirmDelete] = useState(false)
+  const me = adults.includes(currentUser) ? currentUser : adults[0]
+  const other = adults.find(adult => adult !== me)
+  const possessive = name => name?.endsWith('s') ? `${name}’` : `${name}’s`
+  const completed = task.status === 'complete'
+  return <div className="task-action-wrap">
+    {!completed && <div className="task-primary-actions" aria-label={`Actions for ${task.title}`}>
+      <button className="complete" onClick={() => onComplete(task.id)}><Check size={15} />Complete</button>
+      <button className={task.claimedBy === me ? 'owner active' : 'owner'} onClick={() => onClaim(task.id, me)} aria-pressed={task.claimedBy === me}><UserRound size={14} />Mine</button>
+      {other && <button className={task.claimedBy === other ? 'owner active' : 'owner'} onClick={() => onClaim(task.id, other)} aria-pressed={task.claimedBy === other}>{possessive(other)}</button>}
+      <button onClick={() => onDefer(task.id)}><Clock3 size={14} />Defer</button>
+    </div>}
+    <div className="task-secondary-actions">
+      <IconButton label={`More actions for ${task.title}`} aria-expanded={menuOpen} onClick={() => { setMenuOpen(value => !value); setConfirmDelete(false) }}><MoreHorizontal size={19} /></IconButton>
+      {menuOpen && <div className="context-menu task-action-menu"><button onClick={() => { onEdit(task); setMenuOpen(false) }}><Edit3 />Edit</button><button className="danger" onClick={() => { setMenuOpen(false); setConfirmDelete(true) }}><Trash2 />Delete…</button></div>}
+      {confirmDelete && <div className="delete-confirm" role="alert"><span>Delete “{task.title}”?</span><button className="danger" onClick={() => onDelete(task.id)}>Delete task</button><button onClick={() => { setConfirmDelete(false); setMenuOpen(false) }}>Keep</button></div>}
+    </div>
+  </div>
+}
+
+function PlanView({ data, update, setModal, completeTask, claimTask, quickDeferTask, deleteTask, navigate, cloud }) {
   const [section, setSection] = useState('today')
   const entries = buildPlanEntries(data)
   const sections = [['today', 'Today'], ['week', 'This week'], ['later', 'Later'], ['completed', 'Completed']]
@@ -209,9 +235,9 @@ function PlanView({ data, update, setModal, completeTask, navigate }) {
     <div className="plan-tabs" role="tablist" aria-label="Plan timing">{sections.map(([id, label]) => <button role="tab" aria-selected={section === id} className={section === id ? 'active' : ''} key={id} onClick={() => setSection(id)}>{label}<span>{entries[id].length}</span></button>)}</div>
     <section className="plan-list" aria-live="polite">
       {entries[section].map(entry => <article className={`plan-row ${entry.type} ${section === 'completed' ? 'completed' : ''}`} key={entry.id}>
-        {entry.type === 'task' ? <button className={`check-control ${entry.task.status === 'complete' ? 'done' : ''}`} disabled={entry.task.status === 'complete'} onClick={() => completeTask(entry.task.id)} aria-label={entry.task.status === 'complete' ? `Completed ${entry.title}` : `Complete ${entry.title}`}><Check size={15} /></button> : <span className="entry-icon">{entry.type === 'event' ? <CalendarDays size={17} /> : <Goal size={17} />}</span>}
+        {entry.type === 'task' ? <span className={`entry-icon task ${entry.task.status === 'complete' ? 'done' : ''}`}><Check size={15} /></span> : <span className="entry-icon">{entry.type === 'event' ? <CalendarDays size={17} /> : <Goal size={17} />}</span>}
         <div className="entry-copy"><strong>{entry.title}</strong>{entry.detail && <p>{entry.detail}</p>}<div className="entry-meta">{entry.type === 'task' && <><span>{entry.task.date || entry.task.dueWindow}</span>{entry.task.claimedBy && <span>{entry.task.claimedBy}</span>}{entry.task.recurrence && <span>{recurrenceLabel[entry.task.recurrence.type]}</span>}</>}{entry.type === 'event' && <span>Upcoming commitment</span>}{entry.type === 'goal' && <span>Goal next action</span>}</div></div>
-        {entry.type === 'task' && <IconButton label={`Edit ${entry.title}`} onClick={() => setModal({ type: 'task', task: entry.task })}><Edit3 size={18} /></IconButton>}
+        {entry.type === 'task' && <TaskPrimaryActions task={entry.task} adults={data.adults} currentUser={cloud?.user?.display_name || data.adults[0]} onComplete={completeTask} onClaim={claimTask} onDefer={quickDeferTask} onEdit={task => setModal({ type: 'task', task })} onDelete={deleteTask} />}
         {entry.type === 'event' && <IconButton label={`Edit ${entry.title}`} onClick={() => setModal({ type: 'event', event: entry.event })}><Edit3 size={18} /></IconButton>}
         {entry.type === 'goal' && <IconButton label={`Edit ${entry.goal.title}`} onClick={() => setModal({ type: 'goal', goal: entry.goal })}><Edit3 size={18} /></IconButton>}
       </article>)}
@@ -221,7 +247,7 @@ function PlanView({ data, update, setModal, completeTask, navigate }) {
   </div>
 }
 
-function TodayView({ data, update, setModal, completeTask, navigate }) {
+function TodayView({ data, update, setModal, completeTask, claimTask, quickDeferTask, deleteTask, navigate, cloud }) {
   const priorityOrder = { must: 0, should: 1, could: 2 }
   const todayTaskIds = new Set(buildPlanEntries(data).today.filter(entry => entry.type === 'task').map(entry => entry.task.id))
   const importantTasks = [...data.tasks]
@@ -239,7 +265,7 @@ function TodayView({ data, update, setModal, completeTask, navigate }) {
       </section>
       <section className="stack-card"><div className="section-heading"><div><span className="eyebrow">Up next</span><h2>Important actions</h2></div><Clock3 size={21} /></div>
         <div className="task-list compact">
-          {importantTasks.map(task => <div className="today-task" key={task.id}><div><strong>{task.title}</strong><p>{task.explanation}</p><span>{task.dueWindow} · {task.minutes} min</span></div><div className="today-task-actions"><Button variant="soft" icon={Check} onClick={() => completeTask(task.id)}>Complete</Button><IconButton label={`Edit ${task.title}`} onClick={() => setModal({ type: 'task', task })}><MoreHorizontal size={19} /></IconButton></div></div>)}
+          {importantTasks.map(task => <div className="today-task" key={task.id}><div><strong>{task.title}</strong><p>{task.explanation}</p><span>{task.claimedBy ? `${task.claimedBy} · ` : ''}{task.dueWindow} · {task.minutes} min</span></div><TaskPrimaryActions task={task} adults={data.adults} currentUser={cloud?.user?.display_name || data.adults[0]} onComplete={completeTask} onClaim={claimTask} onDefer={quickDeferTask} onEdit={taskToEdit => setModal({ type: 'task', task: taskToEdit })} onDelete={deleteTask} /></div>)}
           {!importantTasks.length && <EmptyState title="Today is clear" text="There are no important household actions waiting right now." />}
         </div>
         <Button variant="text" onClick={() => navigate('plan')}>Open Plan <ArrowRight size={16} /></Button>

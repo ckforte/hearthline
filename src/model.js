@@ -34,6 +34,18 @@ export function upsertTask(tasks, task) {
     : [...tasks, task]
 }
 
+export function assignTask(tasks, taskId, person) {
+  return tasks.map(task => task.id === taskId
+    ? { ...task, claimedBy: task.claimedBy === person ? '' : person }
+    : task)
+}
+
+export function deferTaskToLater(tasks, taskId) {
+  return tasks.map(task => task.id === taskId
+    ? { ...task, status: 'open', date: 'Later', dueWindow: 'Later', timeSensitive: false }
+    : task)
+}
+
 export function toggleTaskCompletion(tasks, taskId) {
   return tasks.map(task => task.id === taskId
     ? { ...task, status: task.status === 'complete' ? 'open' : 'complete' }

@@ -1,6 +1,6 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import { buildPlanEntries, completeTaskWithRecurrence, nextOccurrenceDate, taskFromForm } from '../src/model.js'
+import { assignTask, buildPlanEntries, completeTaskWithRecurrence, deferTaskToLater, nextOccurrenceDate, taskFromForm } from '../src/model.js'
 
 const noon = value => new Date(`${value}T12:00:00`)
 const recurringTask = (type, extra = {}) => ({
@@ -76,4 +76,22 @@ test('simplified task editing preserves advanced task information', () => {
   const cleared = taskFromForm(form, updated, 'ignored')
   assert.equal(cleared.claimedBy, '')
   assert.equal(cleared.explanation, '')
+})
+
+test('one-tap ownership and defer actions update only the selected task', () => {
+  const tasks = [
+    { id: 'task-1', title: 'Water plants', status: 'open', date: 'Today', claimedBy: '' },
+    { id: 'task-2', title: 'Call plumber', status: 'open', date: 'This week', claimedBy: 'Ryan' },
+  ]
+  const mine = assignTask(tasks, 'task-1', 'Chris')
+  assert.equal(mine[0].claimedBy, 'Chris')
+  assert.equal(mine[1].claimedBy, 'Ryan')
+  const unassigned = assignTask(mine, 'task-1', 'Chris')
+  assert.equal(unassigned[0].claimedBy, '')
+
+  const deferred = deferTaskToLater(mine, 'task-1')
+  assert.equal(deferred[0].date, 'Later')
+  assert.equal(deferred[0].dueWindow, 'Later')
+  assert.equal(deferred[0].timeSensitive, false)
+  assert.equal(deferred[1].date, 'This week')
 })
