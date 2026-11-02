@@ -3,7 +3,7 @@ import assert from 'node:assert/strict'
 import { readFile } from 'node:fs/promises'
 import { getSessionToken, setSessionToken } from '../src/api.js'
 import { clearPrivateBrowserState, HOUSEHOLD_CACHE_KEY, PENDING_CHANGES_KEY, readPendingChanges, SESSION_KEY, writePendingChanges } from '../src/offline.js'
-import { confirmRoutine, taskFromForm, toggleTaskCompletion, upsertTask } from '../src/model.js'
+import { completeTaskWithRecurrence, confirmRoutine, taskFromForm, upsertTask } from '../src/model.js'
 import { householdHasAccountSpace } from '../worker/index.js'
 
 class MemoryStorage {
@@ -47,13 +47,12 @@ test('offline changes survive a reload until they are saved or signed out', () =
 test('a task can be created and completed', () => {
   const form = new FormData()
   form.set('title', 'Replace hallway bulb')
-  form.set('date', 'Today')
-  form.set('dueWindow', 'Today')
+  form.set('timing', 'Today')
   const task = taskFromForm(form, null, 'task-1')
   const created = upsertTask([], task)
   assert.equal(created.length, 1)
   assert.equal(created[0].status, 'open')
-  const completed = toggleTaskCompletion(created, 'task-1')
+  const completed = completeTaskWithRecurrence(created, 'task-1')
   assert.equal(completed[0].status, 'complete')
 })
 

@@ -5,22 +5,13 @@ import {
   Goal, HeartPulse, Home, Inbox, Info, Leaf, Menu, Mic, MicOff, Minus, Moon, MoreHorizontal,
   PawPrint, Plus, Settings, ShieldCheck, Sparkles, Sun, Trash2, UserRound, Users, Wrench, X,
 } from 'lucide-react'
-import { effortOptions, seededData } from './data'
+import { seededData } from './data'
 import { HOUSEHOLD_CACHE_KEY } from './offline'
-import { confirmRoutine, taskFromForm, toggleTaskCompletion, updateRoutineItem, upsertTask } from './model'
+import { buildPlanEntries, completeTaskWithRecurrence, confirmRoutine, taskFromForm, updateRoutineItem, upsertTask } from './model'
 
 const NAV_ITEMS = [
   ['today', 'Today', Sun], ['plan', 'Plan', ClipboardList], ['pets', 'Pets', PawPrint], ['home', 'Home', Home],
 ]
-
-const PLAN_SECTIONS = [
-  ['plan', 'Overview', ClipboardList, 'See every planning tool in one place.'],
-  ['weekend', 'Weekend', Sparkles, 'Choose a realistic amount of household work.'],
-  ['calendar', 'Upcoming', CalendarDays, 'Review shared time and preparation.'],
-  ['goals', 'Goals', Goal, 'Turn longer-term ideas into next actions.'],
-  ['inbox', 'Inbox', Inbox, 'Organize thoughts captured for later.'],
-]
-const PLAN_VIEWS = new Set(PLAN_SECTIONS.map(([id]) => id))
 
 const uid = (prefix = 'item') => `${prefix}-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`
 const titleCase = (value = '') => value.charAt(0).toUpperCase() + value.slice(1)
@@ -141,7 +132,7 @@ function App({ cloud = null, remoteData = null, remoteRevision = 0, onDataChange
   const notify = (message) => setToast(message)
 
   const completeTask = (taskId) => {
-    update(next => { next.tasks = toggleTaskCompletion(next.tasks, taskId) })
+    update(next => { next.tasks = completeTaskWithRecurrence(next.tasks, taskId, new Date()) })
   }
   const claimTask = (taskId, person) => {
     update(next => { const task = next.tasks.find(t => t.id === taskId); if (task) task.claimedBy = task.claimedBy === person ? '' : person })
@@ -173,11 +164,8 @@ function App({ cloud = null, remoteData = null, remoteRevision = 0, onDataChange
     <aside className={`sidebar ${mobileNav ? 'open' : ''}`}>
       <div className="brand"><span className="brand-mark"><Flame size={21} /></span><div><strong>{data.brandName}</strong><small>Home, held together</small></div></div>
       <nav aria-label="Primary navigation">
-        {NAV_ITEMS.map(([id, label, Icon]) => <button key={id} className={view === id || (id === 'plan' && PLAN_VIEWS.has(view)) ? 'active' : ''} onClick={() => navigate(id)}><Icon size={19} /><span>{label}</span>{id === 'plan' && data.inbox.some(i => i.status === 'unorganized') && <i>{data.inbox.filter(i => i.status === 'unorganized').length}</i>}</button>)}
+        {NAV_ITEMS.map(([id, label, Icon]) => <button key={id} className={view === id ? 'active' : ''} onClick={() => navigate(id)}><Icon size={19} /><span>{label}</span>{id === 'plan' && data.inbox.some(i => i.status === 'unorganized') && <i>{data.inbox.filter(i => i.status === 'unorganized').length}</i>}</button>)}
       </nav>
-      {PLAN_VIEWS.has(view) && <nav className="plan-subnav" aria-label="Plan sections">
-        {PLAN_SECTIONS.map(([id, label]) => <button key={id} className={view === id ? 'active' : ''} onClick={() => navigate(id)}>{label}{id === 'inbox' && data.inbox.some(i => i.status === 'unorganized') && <i>{data.inbox.filter(i => i.status === 'unorganized').length}</i>}</button>)}
-      </nav>}
       <div className="sidebar-footer">
         <button className={`account-control ${view === 'settings' ? 'active' : ''}`} onClick={() => navigate('settings')} aria-label="Open household settings"><UserRound size={18} /><span><strong>{cloud?.user?.display_name || data.adults[0]}</strong><small>Account & settings</small></span><Settings size={16} /></button>
         <p><Users size={16} /> {data.adults.join(' + ')}</p>
@@ -190,7 +178,7 @@ function App({ cloud = null, remoteData = null, remoteRevision = 0, onDataChange
       {cloud?.status === 'attention' && <div className="sync-alert" role="alert"><div><strong>A newer household change was saved first.</strong><span>Your change is paused so nothing is overwritten silently. Review this screen, then keep your change only if it should replace the newer version.</span></div><Button variant="light" onClick={cloud.retry}>Keep my changes</Button></div>}
       {views[view]}
     </main>
-    {modal?.type === 'task' && <TaskModal task={modal.task} onClose={() => setModal(null)} onSave={(form) => { saveTask(form, modal.task?.id && !modal.isNew ? modal.task : null); setModal(null); notify(modal.task?.id && !modal.isNew ? 'Task updated' : 'Task added') }} />}
+    {modal?.type === 'task' && <TaskModal task={modal.task} adults={data.adults} onClose={() => setModal(null)} onSave={(form) => { saveTask(form, modal.task?.id && !modal.isNew ? modal.task : null); setModal(null); notify(modal.task?.id && !modal.isNew ? 'Task updated' : 'Task added') }} />}
     {modal?.type === 'defer' && <DeferModal task={modal.task} onClose={() => setModal(null)} onConfirm={(reason, timing) => { deferTask(modal.task, reason, timing); setModal(null); notify('Rescheduled with your approval') }} />}
     {modal?.type === 'event' && <EventModal event={modal.event} adults={data.adults} onClose={() => setModal(null)} onSave={(event) => { update(next => { next.events = modal.event ? next.events.map(e => e.id === modal.event.id ? event : e) : [...next.events, event] }); setModal(null); notify('Calendar updated') }} />}
     {modal?.type === 'goal' && <GoalModal goal={modal.goal} onClose={() => setModal(null)} onSave={(goal) => { update(next => { next.goals = modal.goal ? next.goals.map(g => g.id === modal.goal.id ? goal : g) : [...next.goals, goal] }); setModal(null); notify('Goal saved') }} />}
@@ -203,30 +191,41 @@ function PageHeader({ eyebrow, title, description, actions }) {
   return <header className="page-header"><div><span className="eyebrow">{eyebrow}</span><h1>{title}</h1>{description && <p>{description}</p>}</div>{actions && <div className="page-actions">{actions}</div>}</header>
 }
 
-function PlanView({ data, navigate }) {
-  const counts = {
-    weekend: data.tasks.filter(task => task.status !== 'complete' && task.date === 'Weekend').length,
-    calendar: data.events.length,
-    goals: data.goals.filter(goal => goal.status === 'active').length,
-    inbox: data.inbox.filter(item => item.status === 'unorganized').length,
-  }
+function PlanView({ data, update, setModal, completeTask, navigate }) {
+  const [section, setSection] = useState('today')
+  const entries = buildPlanEntries(data)
+  const sections = [['today', 'Today'], ['week', 'This week'], ['later', 'Later'], ['completed', 'Completed']]
+  const recurrenceLabel = { daily: 'Daily', weekdays: 'Selected weekdays', weekly: 'Weekly', monthly: 'Monthly', 'after-completion': 'After completion' }
+  const saveCapacity = (person, level) => update(next => {
+    if (!next.capacity[person]) next.capacity[person] = { level: 'moderate', unavailable: '', note: '' }
+    next.capacity[person].level = level
+  })
   return <div className="page plan-page">
-    <PageHeader eyebrow="Household plan" title="One place to look ahead" description="Weekend work, upcoming commitments, longer-term goals, and captured thoughts stay together here while Hearthline moves toward one simpler plan." />
-    <div className="plan-overview-grid">
-      {PLAN_SECTIONS.slice(1).map(([id, label, Icon, description]) => <button key={id} className="plan-overview-card" onClick={() => navigate(id)}>
-        <span className="plan-overview-icon"><Icon size={22} /></span>
-        <span><strong>{label}</strong><small>{description}</small></span>
-        <span className="plan-overview-count">{counts[id]}</span>
-        <ArrowRight size={18} />
-      </button>)}
-    </div>
+    <PageHeader eyebrow="Household plan" title="One plan for what’s ahead" description="Tasks, next actions, and upcoming commitments appear once, in the time window where they matter." actions={<><Button variant="outline" icon={CalendarDays} onClick={() => setModal({ type: 'event' })}>Add event</Button><Button icon={Plus} onClick={() => setModal({ type: 'task' })}>Add task</Button></>} />
+    <section className="plan-capacity" aria-label="Weekend capacity">
+      <div><span className="eyebrow">Weekend capacity</span><strong>Keep the plan realistic</strong></div>
+      <div className="plan-capacity-people">{data.adults.map(person => <div className="plan-capacity-person" key={person}><span>{person}</span><div className="segmented" aria-label={`${person} weekend capacity`}>{['low', 'moderate', 'high'].map(level => <button type="button" key={level} className={data.capacity?.[person]?.level === level ? 'selected' : ''} onClick={() => saveCapacity(person, level)}>{titleCase(level)}</button>)}</div></div>)}</div>
+    </section>
+    <div className="plan-tabs" role="tablist" aria-label="Plan timing">{sections.map(([id, label]) => <button role="tab" aria-selected={section === id} className={section === id ? 'active' : ''} key={id} onClick={() => setSection(id)}>{label}<span>{entries[id].length}</span></button>)}</div>
+    <section className="plan-list" aria-live="polite">
+      {entries[section].map(entry => <article className={`plan-row ${entry.type} ${section === 'completed' ? 'completed' : ''}`} key={entry.id}>
+        {entry.type === 'task' ? <button className={`check-control ${entry.task.status === 'complete' ? 'done' : ''}`} disabled={entry.task.status === 'complete'} onClick={() => completeTask(entry.task.id)} aria-label={entry.task.status === 'complete' ? `Completed ${entry.title}` : `Complete ${entry.title}`}><Check size={15} /></button> : <span className="entry-icon">{entry.type === 'event' ? <CalendarDays size={17} /> : <Goal size={17} />}</span>}
+        <div className="entry-copy"><strong>{entry.title}</strong>{entry.detail && <p>{entry.detail}</p>}<div className="entry-meta">{entry.type === 'task' && <><span>{entry.task.date || entry.task.dueWindow}</span>{entry.task.claimedBy && <span>{entry.task.claimedBy}</span>}{entry.task.recurrence && <span>{recurrenceLabel[entry.task.recurrence.type]}</span>}</>}{entry.type === 'event' && <span>Upcoming commitment</span>}{entry.type === 'goal' && <span>Goal next action</span>}</div></div>
+        {entry.type === 'task' && <IconButton label={`Edit ${entry.title}`} onClick={() => setModal({ type: 'task', task: entry.task })}><Edit3 size={18} /></IconButton>}
+        {entry.type === 'event' && <IconButton label={`Edit ${entry.title}`} onClick={() => setModal({ type: 'event', event: entry.event })}><Edit3 size={18} /></IconButton>}
+        {entry.type === 'goal' && <IconButton label={`Edit ${entry.goal.title}`} onClick={() => setModal({ type: 'goal', goal: entry.goal })}><Edit3 size={18} /></IconButton>}
+      </article>)}
+      {!entries[section].length && <EmptyState icon={section === 'completed' ? CheckCircle2 : ClipboardList} title={section === 'completed' ? 'Nothing completed yet' : 'This part of the plan is clear'} text="Add something only when it would genuinely help the household coordinate." />}
+    </section>
+    {data.inbox.some(item => item.status === 'unorganized') && <button className="plan-inbox-link" onClick={() => navigate('inbox')}><Inbox size={17} /><span><strong>{data.inbox.filter(item => item.status === 'unorganized').length} captured thoughts</strong><small>Review them when you are ready.</small></span><ArrowRight size={17} /></button>}
   </div>
 }
 
 function TodayView({ data, update, setModal, completeTask, navigate }) {
   const priorityOrder = { must: 0, should: 1, could: 2 }
+  const todayTaskIds = new Set(buildPlanEntries(data).today.filter(entry => entry.type === 'task').map(entry => entry.task.id))
   const importantTasks = [...data.tasks]
-    .filter(task => task.status === 'open' && (task.date === 'Today' || task.timeSensitive))
+    .filter(task => task.status === 'open' && (todayTaskIds.has(task.id) || task.timeSensitive))
     .sort((a, b) => Number(Boolean(b.timeSensitive)) - Number(Boolean(a.timeSensitive)) || (priorityOrder[a.priority] ?? 3) - (priorityOrder[b.priority] ?? 3))
     .slice(0, 3)
   const openRoutines = Object.entries(data.routines).filter(([, routine]) => routine.items.some(item => item.status !== 'given'))
@@ -247,7 +246,7 @@ function TodayView({ data, update, setModal, completeTask, navigate }) {
       </section>
     </div>
     <section className="next-strip">
-      <div className="next-icon"><CalendarDays /></div><div><span className="eyebrow">Next commitment</span><h3>{upcoming?.private ? 'Private appointment' : upcoming?.title || 'Nothing upcoming'}</h3><p>{upcoming ? `${shortDate(upcoming.date)} at ${displayClock(upcoming.time)}${upcoming.preparation ? ` · Prepare: ${upcoming.preparation}` : ''}` : 'The near future is open.'}</p></div><Button variant="outline" onClick={() => navigate('calendar')}>View upcoming</Button>
+      <div className="next-icon"><CalendarDays /></div><div><span className="eyebrow">Next commitment</span><h3>{upcoming?.private ? 'Private appointment' : upcoming?.title || 'Nothing upcoming'}</h3><p>{upcoming ? `${shortDate(upcoming.date)} at ${displayClock(upcoming.time)}${upcoming.preparation ? ` · Prepare: ${upcoming.preparation}` : ''}` : 'The near future is open.'}</p></div><Button variant="outline" onClick={() => navigate('plan')}>Open Plan</Button>
     </section>
   </div>
 }
@@ -310,17 +309,21 @@ function TaskGroup({ priority, tasks, adults, onComplete, onClaim, onEdit, onDef
   </section>
 }
 
-function TaskModal({ task, onClose, onSave }) {
-  return <Modal title={task ? 'Edit task' : 'Add a household task'} subtitle="Keep it small enough to understand at a glance." onClose={onClose} wide>
+function TaskModal({ task, adults, onClose, onSave }) {
+  const [recurrence, setRecurrence] = useState(task?.recurrence?.type || 'none')
+  const timing = !task ? 'This week' : ['Today', 'This week', 'Later'].includes(task.date) ? task.date : task.date === 'Weekend' ? 'This week' : 'Later'
+  return <Modal title={task ? 'Edit task' : 'Add a household task'} subtitle="A title is enough. Timing and owner can stay simple." onClose={onClose}>
     <form className="form-grid" onSubmit={e => { e.preventDefault(); onSave(new FormData(e.currentTarget)) }}>
       <label className="span-2">Title<input name="title" defaultValue={task?.title} required autoFocus /></label>
-      <label className="span-2">Short explanation<textarea name="explanation" defaultValue={task?.explanation} rows="2" required /></label>
-      <label>Category<input name="category" defaultValue={task?.category || 'Home'} /></label><label>Estimated minutes<input name="minutes" type="number" min="5" step="5" defaultValue={task?.minutes || 30} /></label>
-      <label>Effort<select name="effort" defaultValue={task?.effort || 2}>{effortOptions.map(e => <option key={e}>{e}</option>)}</select></label><label>Importance<select name="priority" defaultValue={task?.priority || 'should'}><option value="must">Must do</option><option value="should">Should do</option><option value="could">Could do</option></select></label>
-      <label>Due window<input name="dueWindow" defaultValue={task?.dueWindow || 'This weekend'} /></label><label>Suggested timing<input name="timing" defaultValue={task?.timing || 'Any time'} /></label>
-      <label>Where<select name="setting" defaultValue={task?.setting || 'indoor'}><option value="indoor">Indoor</option><option value="outdoor">Outdoor</option></select></label><label>Who can handle it?<select name="help" defaultValue={task?.help || 'diy'}><option value="diy">DIY</option><option value="professional">Professional</option><option value="either">Either</option></select></label>
-      <label>Optional estimated cost<input name="cost" defaultValue={task?.cost} placeholder="e.g. About $25" /></label><label>Show in<select name="date" defaultValue={task?.date || 'Weekend'}><option>Today</option><option>Weekend</option><option>Upcoming</option></select></label>
-      <label className="checkbox-label span-2"><input type="checkbox" name="timeSensitive" defaultChecked={task?.timeSensitive} /> Truly time-sensitive</label>
+      <label>Timing<select name="timing" defaultValue={timing}><option>Today</option><option>This week</option><option>Later</option></select></label>
+      <label>Optional owner<select name="owner" defaultValue={task?.claimedBy || ''}><option value="">Unassigned</option>{adults.map(adult => <option key={adult}>{adult}</option>)}</select></label>
+      <details className="more-details span-2"><summary>More details</summary><div className="more-details-grid">
+        <label className="span-2">Notes<textarea name="notes" defaultValue={task?.explanation} rows="3" placeholder="Anything useful to remember?" /></label>
+        <label className="span-2">Repeat<select name="recurrence" value={recurrence} onChange={event => setRecurrence(event.target.value)}><option value="none">Does not repeat</option><option value="daily">Daily</option><option value="weekdays">Selected weekdays</option><option value="weekly">Weekly</option><option value="monthly">Monthly</option><option value="after-completion">After completion</option></select></label>
+        {recurrence === 'weekdays' && <fieldset className="span-2 weekday-picker"><legend>Repeat on</legend>{['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'].map((day, index) => <label key={day}><input type="checkbox" name="weekdays" value={index} defaultChecked={task?.recurrence?.weekdays?.includes(index) ?? (index > 0 && index < 6)} />{day}</label>)}</fieldset>}
+        {recurrence === 'after-completion' && <label className="span-2">Days after completion<input name="intervalDays" type="number" min="1" max="365" defaultValue={task?.recurrence?.intervalDays || 7} /></label>}
+        {task && <p className="legacy-task-note span-2">Existing effort, priority, category, and home details are preserved when you save.</p>}
+      </div></details>
       <div className="form-actions span-2"><Button type="button" variant="outline" onClick={onClose}>Cancel</Button><Button type="submit">{task ? 'Save changes' : 'Add task'}</Button></div>
     </form>
   </Modal>
@@ -517,7 +520,7 @@ function DisplayMode({ mode, data, update, onClose, navigate }) {
   const tomorrow = [...data.events].sort((a, b) => a.date.localeCompare(b.date))[0]
   return <div className={`display-mode ${mode}`}><header><div className="display-brand"><span><Flame /></span><strong>{data.brandName}</strong><small>{titleCase(mode)} mode</small></div><div className="display-time"><strong>{new Date().toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' })}</strong><span>{friendlyDate()}</span></div><Button variant="light" icon={X} onClick={onClose}>Exit</Button></header>
     {mode === 'entry' && <div className="display-content"><section className="display-hero"><span className="eyebrow">At a glance</span><h1>The household is in good shape.</h1><p>One preparation item and an outdoor task are worth keeping in view.</p></section><div className="display-grid"><section className="display-panel"><span className="eyebrow">Today’s schedule</span>{data.events.slice(0, 2).map(event => <div className="display-row" key={event.id}><CalendarDays /><div><strong>{event.private ? 'Unavailable' : event.title}</strong><p>{shortDate(event.date)} · {event.time}</p></div></div>)}</section><section className="display-panel"><span className="eyebrow">Departure & preparation</span><div className="display-row"><ClipboardList /><div><strong>{tomorrow?.preparation || 'No preparation needed'}</strong><p>{tomorrow ? `For ${tomorrow.private ? 'an upcoming appointment' : tomorrow.title}` : 'The near future is open'}</p></div></div></section><section className="display-panel"><span className="eyebrow">Weather-sensitive</span>{data.tasks.filter(t => t.setting === 'outdoor' && t.status === 'open').slice(0, 2).map(task => <div className="display-row" key={task.id}><CloudSun /><div><strong>{task.title}</strong><p>{task.timing}</p></div></div>)}</section><section className="display-panel quick-capture" onClick={() => navigate('inbox')}><Mic /><div><strong>Quick voice capture</strong><p>Tap to open the household inbox</p></div><ArrowRight /></section></div></div>}
-    {mode === 'office' && <div className="display-content"><section className="display-hero"><span className="eyebrow">Planning space</span><h1>What would help the household most?</h1><p>Review plans, care, projects, and shared records without the daily noise.</p></section><div className="office-tiles"><button onClick={() => navigate('weekend')}><Sparkles /><span>Weekend planning</span><small>Capacity and a realistic pool</small></button><button onClick={() => navigate('home')}><Home /><span>Home health</span><small>Suggestions and service records</small></button><button onClick={() => navigate('goals')}><Goal /><span>Projects & goals</span><small>Progress beyond the urgent</small></button><button onClick={() => navigate('calendar')}><CalendarDays /><span>Calendar coordination</span><small>Shared time and preparation</small></button><button onClick={() => navigate('settings')}><Settings /><span>Configuration</span><small>Household and display setup</small></button></div></div>}
+    {mode === 'office' && <div className="display-content"><section className="display-hero"><span className="eyebrow">Planning space</span><h1>What would help the household most?</h1><p>Review plans, care, projects, and shared records without the daily noise.</p></section><div className="office-tiles"><button onClick={() => navigate('plan')}><ClipboardList /><span>Household plan</span><small>Tasks, goals, capacity, and commitments together</small></button><button onClick={() => navigate('home')}><Home /><span>Home health</span><small>Suggestions and service records</small></button><button onClick={() => navigate('pets')}><PawPrint /><span>Pet care</span><small>Profiles and confirmed routines</small></button><button onClick={() => navigate('today')}><Sun /><span>Today</span><small>Only what matters right now</small></button><button onClick={() => navigate('settings')}><Settings /><span>Configuration</span><small>Household and display setup</small></button></div></div>}
     {mode === 'bedroom' && <div className="display-content bedroom-content"><section className={`bedroom-state ${eveningDone ? 'done' : ''}`}><span>{eveningDone ? <ShieldCheck /> : <Moon />}</span><p>{eveningDone ? 'Settle in' : 'A gentle close to the day'}</p><h1>{eveningDone ? 'Everything important is covered' : 'Evening care is still open'}</h1><p>{eveningDone ? 'Pet care is confirmed. Tomorrow is prepared enough for tonight.' : 'Confirm the routine when it is truly complete.'}</p>{!eveningDone && <Button variant="light" icon={Check} onClick={completeEvening}>Confirm evening routine</Button>}</section><section className="tomorrow-card"><span className="eyebrow">Tomorrow preview</span><div className="display-row"><Sun /><div><strong>{tomorrow?.private ? 'An appointment is on the calendar' : tomorrow?.title || 'No appointments scheduled'}</strong><p>{tomorrow ? `${shortDate(tomorrow.date)} at ${tomorrow.time}` : 'The morning is open.'}</p></div></div>{tomorrow?.preparation && <div className="display-row"><ClipboardList /><div><strong>Prepare</strong><p>{tomorrow.preparation}</p></div></div>}</section></div>}
   </div>
 }
