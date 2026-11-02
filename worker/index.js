@@ -143,16 +143,29 @@ async function getData(request, env, auth) {
   return json({ data, versions, updatedAt }, 200, request, env)
 }
 
-async function saveSection(request, env, auth, section) {
+export async function saveSection(request, env, auth, section) {
   if (!DATA_SECTIONS.has(section)) return json({ error: 'That data section is not supported.' }, 400, request, env)
   const body = await readJson(request)
   if (!Object.prototype.hasOwnProperty.call(body, 'data')) return json({ error: 'Missing section data.' }, 400, request, env)
+  const expectedVersion = Number(body.version)
+  if (!Number.isInteger(expectedVersion) || expectedVersion < 1) return json({ error: 'Refresh this section before saving it.' }, 400, request, env)
   const serialized = JSON.stringify(body.data)
   if (encoder.encode(serialized).byteLength > MAX_SECTION_BYTES) return json({ error: 'That section is too large to save.' }, 413, request, env)
   const now = Date.now()
-  const result = await env.DB.prepare('UPDATE household_data SET data = ?, version = version + 1, updated_by = ?, updated_at = ? WHERE household_id = ? AND section = ? RETURNING version')
-    .bind(serialized, auth.user.id, now, auth.household.id, section).first()
-  if (!result) return json({ error: 'That data section was not found.' }, 404, request, env)
+  const result = await env.DB.prepare('UPDATE household_data SET data = ?, version = version + 1, updated_by = ?, updated_at = ? WHERE household_id = ? AND section = ? AND version = ? RETURNING version')
+    .bind(serialized, auth.user.id, now, auth.household.id, section, expectedVersion).first()
+  if (!result) {
+    const current = await env.DB.prepare('SELECT data, version, updated_at FROM household_data WHERE household_id = ? AND section = ?').bind(auth.household.id, section).first()
+    if (!current) return json({ error: 'That data section was not found.' }, 404, request, env)
+    return json({
+      error: 'Someone else saved a newer change here. Review the latest version before choosing what to keep.',
+      code: 'SECTION_CONFLICT',
+      section,
+      data: JSON.parse(current.data),
+      version: Number(current.version),
+      updatedAt: Number(current.updated_at || 0),
+    }, 409, request, env)
+  }
   return json({ section, data: body.data, version: result.version, updatedAt: now }, 200, request, env)
 }
 

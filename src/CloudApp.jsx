@@ -3,6 +3,7 @@ import { ArrowRight, Cloud, Flame, Home, KeyRound, LoaderCircle, LogIn, ShieldCh
 import App from './App'
 import { seededData } from './data'
 import { apiBaseUrl, getSessionToken, hearthlineApi, setSessionToken } from './api'
+import { reconcileSection } from './sync'
 
 function GateShell({ children, accountLabel }) {
   return <main className="cloud-gate">
@@ -33,7 +34,7 @@ function SetupScreen({ onAuthenticated }) {
         initialData: seededData({ adult1: displayName, adult2: otherAdult, petNames, firstTask: form.get('firstTask') }),
       })
       setSessionToken(result.token)
-      onAuthenticated(result)
+      await onAuthenticated(result)
     } catch (error) {
       setMessage(error.message)
     } finally {
@@ -82,7 +83,7 @@ function AuthScreen({ joinAvailable, onAuthenticated }) {
     try {
       const result = mode === 'join' ? await hearthlineApi.join(payload) : await hearthlineApi.login(payload)
       setSessionToken(result.token)
-      onAuthenticated(result)
+      await onAuthenticated(result)
     } catch (error) {
       setMessage(error.message)
     } finally {
@@ -117,28 +118,49 @@ function ConnectionError({ message, retry }) {
   return <main className="cloud-gate loading-gate"><span className="gate-icon"><Cloud /></span><h1>Hearthline couldn’t connect</h1><p>{message}</p><button className="gate-submit" onClick={retry}>Try again <ArrowRight /></button></main>
 }
 
-function SharedHousehold({ session, initialData, onSignedOut }) {
+function SharedHousehold({ session, initialData, initialVersions, onSignedOut }) {
   const [remoteData, setRemoteData] = useState(initialData)
   const [remoteRevision, setRemoteRevision] = useState(1)
-  const [syncStatus, setSyncStatus] = useState('synced')
+  const [syncStatus, setSyncStatus] = useState('saved')
   const serverData = useRef(structuredClone(initialData))
+  const versions = useRef({ ...initialVersions })
   const pending = useRef(new Map())
+  const conflicts = useRef(new Map())
   const flushing = useRef(false)
 
   const flushChanges = useCallback(async () => {
-    if (flushing.current || !pending.current.size) return
+    if (flushing.current || !pending.current.size || conflicts.current.size) return
     flushing.current = true
     setSyncStatus('saving')
     try {
       while (pending.current.size) {
-        const batch = [...pending.current.entries()]
-        const results = await Promise.all(batch.map(([section, data]) => hearthlineApi.saveSection(section, data)))
-        batch.forEach(([section, data], index) => {
-          if (pending.current.get(section) === data) pending.current.delete(section)
-          serverData.current[section] = structuredClone(results[index].data)
-        })
+        const [section, change] = pending.current.entries().next().value
+        try {
+          const result = await hearthlineApi.saveSection(section, change.data, change.baseVersion)
+          if (pending.current.get(section) === change) pending.current.delete(section)
+          serverData.current[section] = structuredClone(result.data)
+          versions.current[section] = result.version
+        } catch (error) {
+          if (error.status !== 409 || error.code !== 'SECTION_CONFLICT') throw error
+          const reconciliation = reconcileSection(change.baseData, change.data, error.data)
+          serverData.current[section] = structuredClone(error.data)
+          versions.current[section] = error.version
+          if (reconciliation.resolved) {
+            pending.current.set(section, {
+              data: structuredClone(reconciliation.data),
+              baseData: structuredClone(error.data),
+              baseVersion: error.version,
+            })
+            setRemoteData(current => ({ ...current, [section]: structuredClone(reconciliation.data) }))
+            setRemoteRevision(value => value + 1)
+            continue
+          }
+          conflicts.current.set(section, { ...change, remote: structuredClone(error.data), version: error.version })
+          setSyncStatus('attention')
+          return
+        }
       }
-      setSyncStatus('synced')
+      setSyncStatus('saved')
     } catch {
       setSyncStatus('offline')
     } finally {
@@ -148,8 +170,15 @@ function SharedHousehold({ session, initialData, onSignedOut }) {
 
   const saveChanges = useCallback((nextData) => {
     Object.keys(nextData).forEach(section => {
-      const baseline = pending.current.get(section) || serverData.current[section]
-      if (JSON.stringify(baseline) !== JSON.stringify(nextData[section])) pending.current.set(section, structuredClone(nextData[section]))
+      const existing = pending.current.get(section)
+      const baseline = existing?.data ?? serverData.current[section]
+      if (JSON.stringify(baseline) !== JSON.stringify(nextData[section])) {
+        pending.current.set(section, {
+          data: structuredClone(nextData[section]),
+          baseData: existing?.baseData ?? structuredClone(serverData.current[section]),
+          baseVersion: existing?.baseVersion ?? versions.current[section],
+        })
+      }
     })
     flushChanges()
   }, [flushChanges])
@@ -161,11 +190,12 @@ function SharedHousehold({ session, initialData, onSignedOut }) {
         const result = await hearthlineApi.data()
         if (!active) return
         const next = structuredClone(result.data)
-        for (const [section, local] of pending.current.entries()) next[section] = structuredClone(local)
+        for (const [section, change] of pending.current.entries()) next[section] = structuredClone(change.data)
         serverData.current = structuredClone(result.data)
+        versions.current = { ...result.versions }
         setRemoteData(next)
         setRemoteRevision(value => value + 1)
-        if (!pending.current.size) setSyncStatus('synced')
+        if (!pending.current.size) setSyncStatus('saved')
       } catch (error) {
         if (!active) return
         if (error.status === 401) return onSignedOut()
@@ -184,6 +214,19 @@ function SharedHousehold({ session, initialData, onSignedOut }) {
     }
   }, [flushChanges, onSignedOut])
 
+  const resolveConflict = useCallback(() => {
+    for (const [section, conflict] of conflicts.current.entries()) {
+      pending.current.set(section, {
+        data: structuredClone(conflict.data),
+        baseData: structuredClone(conflict.remote),
+        baseVersion: conflict.version,
+      })
+    }
+    conflicts.current.clear()
+    setSyncStatus('saving')
+    window.setTimeout(flushChanges, 0)
+  }, [flushChanges])
+
   const signOut = useCallback(async () => {
     try { await hearthlineApi.logout() } catch { /* Remove the local session even when offline. */ }
     setSessionToken('')
@@ -194,8 +237,9 @@ function SharedHousehold({ session, initialData, onSignedOut }) {
     household: session.household,
     user: session.user,
     status: syncStatus,
+    retry: syncStatus === 'attention' ? resolveConflict : flushChanges,
     signOut,
-  }), [session, signOut, syncStatus])
+  }), [flushChanges, resolveConflict, session, signOut, syncStatus])
 
   return <App cloud={cloud} remoteData={remoteData} remoteRevision={remoteRevision} onDataChange={saveChanges} />
 }
@@ -203,8 +247,9 @@ function SharedHousehold({ session, initialData, onSignedOut }) {
 export default function CloudApp() {
   const [screen, setScreen] = useState({ state: 'loading' })
 
-  const acceptSession = useCallback((result) => {
-    setScreen({ state: 'ready', session: { user: result.user, household: result.household }, data: result.data })
+  const acceptSession = useCallback(async (result) => {
+    const latest = await hearthlineApi.data()
+    setScreen({ state: 'ready', session: { user: result.user, household: result.household }, data: latest.data, versions: latest.versions })
   }, [])
 
   const boot = useCallback(async () => {
@@ -215,7 +260,7 @@ export default function CloudApp() {
       if (!getSessionToken()) return setScreen({ state: 'auth', joinAvailable: status.joinAvailable })
       try {
         const [session, data] = await Promise.all([hearthlineApi.session(), hearthlineApi.data()])
-        setScreen({ state: 'ready', session, data: data.data })
+        setScreen({ state: 'ready', session, data: data.data, versions: data.versions })
       } catch (error) {
         if (error.status !== 401) throw error
         setSessionToken('')
@@ -233,5 +278,5 @@ export default function CloudApp() {
   if (screen.state === 'error') return <ConnectionError message={screen.message} retry={boot} />
   if (screen.state === 'setup') return <SetupScreen onAuthenticated={acceptSession} />
   if (screen.state === 'auth') return <AuthScreen joinAvailable={screen.joinAvailable} onAuthenticated={acceptSession} />
-  return <SharedHousehold session={screen.session} initialData={screen.data} onSignedOut={boot} />
+  return <SharedHousehold session={screen.session} initialData={screen.data} initialVersions={screen.versions} onSignedOut={boot} />
 }

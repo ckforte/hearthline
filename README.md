@@ -8,7 +8,7 @@ Hearthline is a calm, responsive household-management app for two adults. It com
 - **Shared service:** Cloudflare Worker at `https://hearthline-api.cskeeley.workers.dev`
 - **Data:** private Cloudflare D1 database
 - **Accounts:** exactly one household with a maximum of two permanent accounts
-- **Sync:** saved changes are shared automatically and refreshed every few seconds
+- **Sync:** section versions prevent stale saves from replacing newer changes; the app shows Saved, Saving, Offline—changes waiting, or Needs attention
 
 No Supabase project is used. The app does not request a precise home address.
 
@@ -27,6 +27,12 @@ After the first account is created, the private setup route closes. After the se
 ```sh
 npm install
 npm run dev
+```
+
+Run the automated conflict and reconciliation checks with:
+
+```sh
+npm test
 ```
 
 The frontend reads `VITE_API_URL`. For local full-stack development, place the local Worker URL in `.env.local`, put a test `SETUP_TOKEN` in `.dev.vars`, apply the local D1 migration, and run `npm run worker:dev` alongside Vite.

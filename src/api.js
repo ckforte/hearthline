@@ -30,6 +30,10 @@ async function request(path, options = {}) {
   if (!response.ok) {
     const error = new Error(body.error || 'Something went wrong while connecting to Hearthline.')
     error.status = response.status
+    error.code = body.code
+    error.section = body.section
+    error.data = body.data
+    error.version = body.version
     throw error
   }
   return body
@@ -43,8 +47,8 @@ export const hearthlineApi = {
   login: (payload) => request('/api/login', { method: 'POST', body: JSON.stringify(payload) }),
   logout: () => request('/api/logout', { method: 'POST' }),
   data: () => request('/api/data'),
-  saveSection: (section, data) => request(`/api/data/${encodeURIComponent(section)}`, {
+  saveSection: (section, data, version) => request(`/api/data/${encodeURIComponent(section)}`, {
     method: 'PUT',
-    body: JSON.stringify({ data }),
+    body: JSON.stringify({ data, version }),
   }),
 }

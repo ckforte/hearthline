@@ -65,13 +65,35 @@ function EmptyState({ icon: Icon = CheckCircle2, title, text, action }) {
 }
 
 function Modal({ title, subtitle, children, onClose, wide = false }) {
+  const dialogRef = useRef(null)
   useEffect(() => {
-    const close = (event) => event.key === 'Escape' && onClose()
-    window.addEventListener('keydown', close)
-    return () => window.removeEventListener('keydown', close)
+    const previousFocus = document.activeElement
+    const dialog = dialogRef.current
+    const focusable = () => [...dialog.querySelectorAll('button:not([disabled]), input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])')]
+    const preferred = dialog.querySelector('[autofocus]') || focusable()[0]
+    preferred?.focus()
+    const handleKey = (event) => {
+      if (event.key === 'Escape') {
+        event.preventDefault()
+        onClose()
+        return
+      }
+      if (event.key !== 'Tab') return
+      const controls = focusable()
+      if (!controls.length) return
+      const first = controls[0]
+      const last = controls[controls.length - 1]
+      if (event.shiftKey && document.activeElement === first) { event.preventDefault(); last.focus() }
+      else if (!event.shiftKey && document.activeElement === last) { event.preventDefault(); first.focus() }
+    }
+    document.addEventListener('keydown', handleKey)
+    return () => {
+      document.removeEventListener('keydown', handleKey)
+      if (previousFocus instanceof HTMLElement) previousFocus.focus()
+    }
   }, [onClose])
   return <div className="modal-backdrop" onMouseDown={(e) => e.target === e.currentTarget && onClose()}>
-    <section className={`modal ${wide ? 'wide' : ''}`} role="dialog" aria-modal="true" aria-label={title}>
+    <section ref={dialogRef} className={`modal ${wide ? 'wide' : ''}`} role="dialog" aria-modal="true" aria-label={title}>
       <header className="modal-header"><div><h2>{title}</h2>{subtitle && <p>{subtitle}</p>}</div><IconButton label="Close" onClick={onClose}><X size={20} /></IconButton></header>
       {children}
     </section>
@@ -162,12 +184,13 @@ function App({ cloud = null, remoteData = null, remoteRevision = 0, onDataChange
       <div className="sidebar-footer">
         <button className={`account-control ${view === 'settings' ? 'active' : ''}`} onClick={() => navigate('settings')} aria-label="Open household settings"><UserRound size={18} /><span><strong>{cloud?.user?.display_name || data.adults[0]}</strong><small>Account & settings</small></span><Settings size={16} /></button>
         <p><Users size={16} /> {data.adults.join(' + ')}</p>
-        {cloud ? <small className={`sync-pill ${cloud.status}`}><span />{cloud.status === 'saving' ? 'Saving changes…' : cloud.status === 'synced' ? 'Live & shared' : cloud.status === 'offline' ? 'Working offline' : 'Connecting…'}</small> : <small>Saved on this device</small>}
+        {cloud ? <div className={`sync-pill ${cloud.status}`} role="status" aria-live="polite"><span /> <small>{cloud.status === 'saving' ? 'Saving' : cloud.status === 'saved' ? 'Saved' : cloud.status === 'offline' ? 'Offline—changes waiting' : 'Needs attention'}</small>{['offline', 'attention'].includes(cloud.status) && <button onClick={cloud.retry}>{cloud.status === 'attention' ? 'Keep my changes' : 'Retry'}</button>}</div> : <small>Saved on this device</small>}
       </div>
     </aside>
     {mobileNav && <button className="nav-scrim" aria-label="Close menu" onClick={() => setMobileNav(false)} />}
     <main className="main-shell">
       <header className="mobile-header"><IconButton label="Open menu" onClick={() => setMobileNav(true)}><Menu /></IconButton><strong>{data.brandName}</strong><span /></header>
+      {cloud?.status === 'attention' && <div className="sync-alert" role="alert"><div><strong>A newer household change was saved first.</strong><span>Your change is paused so nothing is overwritten silently. Review this screen, then keep your change only if it should replace the newer version.</span></div><Button variant="light" onClick={cloud.retry}>Keep my changes</Button></div>}
       {views[view]}
     </main>
     {modal?.type === 'task' && <TaskModal task={modal.task} onClose={() => setModal(null)} onSave={(form) => { saveTask(form, modal.task?.id && !modal.isNew ? modal.task : null); setModal(null); notify(modal.task?.id && !modal.isNew ? 'Task updated' : 'Task added') }} />}
@@ -481,8 +504,8 @@ function SettingsView({ data, update, notify, cloud }) {
   const copyInvite = async () => { await navigator.clipboard.writeText(cloud.household.invite_code); notify('Invite code copied') }
   return <div className="page settings-page"><PageHeader eyebrow="Settings" title="Make Hearthline yours" description={cloud ? 'Adjust the household and shared access.' : 'Adjust the household and local data.'} />
     <div className="settings-layout"><section className="settings-card"><div className="settings-heading"><span><Users /></span><div><h2>Household & app name</h2><p>The product name is provisional and can change whenever you like.</p></div></div><form className="form-grid" onSubmit={savePeople}><label className="span-2">App name<input name="brandName" defaultValue={data.brandName} /></label><label>First adult<input name="adult1" defaultValue={data.adults[0]} /></label><label>Second adult<input name="adult2" defaultValue={data.adults[1]} /></label><div className="form-actions span-2"><Button type="submit">Save names</Button></div></form></section>
-      {cloud && <section className="settings-card cloud-account"><div className="settings-heading"><span><Users /></span><div><h2>Shared household access</h2><p>Each adult has a private account and shares the same live household.</p></div><Chip tone="sage">{cloud.status === 'synced' ? 'Live' : titleCase(cloud.status)}</Chip></div><div className="cloud-details"><div><span>Household</span><strong>{cloud.household.name}</strong></div><div><span>Signed in as</span><strong>{cloud.user.email}</strong></div><div className="invite-code"><span>Invite the other person</span><strong>{cloud.household.invite_code}</strong><small>Share this code privately. It grants access after the second account is created.</small></div></div><div className="form-actions"><Button variant="outline" onClick={copyInvite}>Copy invite code</Button><Button variant="text" onClick={cloud.signOut}>Sign out</Button></div></section>}
-      <section className="settings-card"><div className="settings-heading"><span><ShieldCheck /></span><div><h2>Storage & privacy</h2><p>{cloud ? 'Household data is synchronized securely and cached on this device.' : 'This version stores household information only in this browser.'}</p></div></div><div className="setting-row"><div><strong>Gentle reminders</strong><p>Use calm language and avoid intimidating backlog counts.</p></div><label className="switch"><input type="checkbox" checked={data.settings.gentleReminders} onChange={e => update(next => { next.settings.gentleReminders = e.target.checked })} /><span /></label></div><div className="setting-row"><div><strong>Local starter data</strong><p>Clear this device and return to an empty starter household.</p></div>{confirmReset ? <div className="reset-confirm"><Button variant="danger" onClick={reset}>Yes, reset</Button><Button variant="text" onClick={() => setConfirmReset(false)}>Cancel</Button></div> : <Button variant="outline" onClick={() => setConfirmReset(true)}>Reset local data</Button>}</div></section>
+      {cloud && <section className="settings-card cloud-account"><div className="settings-heading"><span><Users /></span><div><h2>Shared household access</h2><p>Each adult has a private account and shares the same live household.</p></div><Chip tone="sage">{cloud.status === 'saved' ? 'Saved' : cloud.status === 'offline' ? 'Offline' : titleCase(cloud.status)}</Chip></div><div className="cloud-details"><div><span>Household</span><strong>{cloud.household.name}</strong></div><div><span>Signed in as</span><strong>{cloud.user.email}</strong></div><div className="invite-code"><span>Invite the other person</span><strong>{cloud.household.invite_code}</strong><small>Share this code privately. It grants access after the second account is created.</small></div></div><div className="form-actions"><Button variant="outline" onClick={copyInvite}>Copy invite code</Button><Button variant="text" onClick={cloud.signOut}>Sign out</Button></div></section>}
+      <section className="settings-card"><div className="settings-heading"><span><ShieldCheck /></span><div><h2>Storage & privacy</h2><p>{cloud ? 'Household data is synchronized securely and cached on this device.' : 'This version stores household information only in this browser.'}</p></div></div><div className="setting-row"><div><strong>Gentle reminders</strong><p>Use calm language and avoid intimidating backlog counts.</p></div><label className="switch"><input type="checkbox" aria-label="Gentle reminders" checked={data.settings.gentleReminders} onChange={e => update(next => { next.settings.gentleReminders = e.target.checked })} /><span aria-hidden="true" /></label></div><div className="setting-row"><div><strong>Local starter data</strong><p>Clear this device and return to an empty starter household.</p></div>{confirmReset ? <div className="reset-confirm"><Button variant="danger" onClick={reset}>Yes, reset</Button><Button variant="text" onClick={() => setConfirmReset(false)}>Cancel</Button></div> : <Button variant="outline" onClick={() => setConfirmReset(true)}>Reset local data</Button>}</div></section>
     </div>
   </div>
 }
