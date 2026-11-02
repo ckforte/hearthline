@@ -3,6 +3,7 @@ import { ArrowRight, Cloud, Flame, Home, KeyRound, LoaderCircle, LogIn, ShieldCh
 import App from './App'
 import { seededData } from './data'
 import { apiBaseUrl, getSessionToken, hearthlineApi, setSessionToken } from './api'
+import { clearPrivateBrowserState, readPendingChanges, writePendingChanges } from './offline'
 import { reconcileSection } from './sync'
 
 function GateShell({ children, accountLabel }) {
@@ -119,12 +120,17 @@ function ConnectionError({ message, retry }) {
 }
 
 function SharedHousehold({ session, initialData, initialVersions, onSignedOut }) {
-  const [remoteData, setRemoteData] = useState(initialData)
+  const restoredPending = useRef(readPendingChanges())
+  const [remoteData, setRemoteData] = useState(() => {
+    const next = structuredClone(initialData)
+    for (const [section, change] of restoredPending.current.entries()) next[section] = structuredClone(change.data)
+    return next
+  })
   const [remoteRevision, setRemoteRevision] = useState(1)
-  const [syncStatus, setSyncStatus] = useState('saved')
+  const [syncStatus, setSyncStatus] = useState(restoredPending.current.size ? 'offline' : 'saved')
   const serverData = useRef(structuredClone(initialData))
   const versions = useRef({ ...initialVersions })
-  const pending = useRef(new Map())
+  const pending = useRef(restoredPending.current)
   const conflicts = useRef(new Map())
   const flushing = useRef(false)
 
@@ -138,6 +144,7 @@ function SharedHousehold({ session, initialData, initialVersions, onSignedOut })
         try {
           const result = await hearthlineApi.saveSection(section, change.data, change.baseVersion)
           if (pending.current.get(section) === change) pending.current.delete(section)
+          writePendingChanges(pending.current)
           serverData.current[section] = structuredClone(result.data)
           versions.current[section] = result.version
         } catch (error) {
@@ -151,6 +158,7 @@ function SharedHousehold({ session, initialData, initialVersions, onSignedOut })
               baseData: structuredClone(error.data),
               baseVersion: error.version,
             })
+            writePendingChanges(pending.current)
             setRemoteData(current => ({ ...current, [section]: structuredClone(reconciliation.data) }))
             setRemoteRevision(value => value + 1)
             continue
@@ -160,6 +168,7 @@ function SharedHousehold({ session, initialData, initialVersions, onSignedOut })
           return
         }
       }
+      writePendingChanges(pending.current)
       setSyncStatus('saved')
     } catch {
       setSyncStatus('offline')
@@ -180,6 +189,7 @@ function SharedHousehold({ session, initialData, initialVersions, onSignedOut })
         })
       }
     })
+    writePendingChanges(pending.current)
     flushChanges()
   }, [flushChanges])
 
@@ -214,6 +224,10 @@ function SharedHousehold({ session, initialData, initialVersions, onSignedOut })
     }
   }, [flushChanges, onSignedOut])
 
+  useEffect(() => {
+    if (pending.current.size) flushChanges()
+  }, [flushChanges])
+
   const resolveConflict = useCallback(() => {
     for (const [section, conflict] of conflicts.current.entries()) {
       pending.current.set(section, {
@@ -223,13 +237,14 @@ function SharedHousehold({ session, initialData, initialVersions, onSignedOut })
       })
     }
     conflicts.current.clear()
+    writePendingChanges(pending.current)
     setSyncStatus('saving')
     window.setTimeout(flushChanges, 0)
   }, [flushChanges])
 
   const signOut = useCallback(async () => {
     try { await hearthlineApi.logout() } catch { /* Remove the local session even when offline. */ }
-    setSessionToken('')
+    clearPrivateBrowserState()
     onSignedOut()
   }, [onSignedOut])
 
@@ -263,7 +278,7 @@ export default function CloudApp() {
         setScreen({ state: 'ready', session, data: data.data, versions: data.versions })
       } catch (error) {
         if (error.status !== 401) throw error
-        setSessionToken('')
+        clearPrivateBrowserState()
         setScreen({ state: 'auth', joinAvailable: status.joinAvailable })
       }
     } catch (error) {

@@ -1,5 +1,6 @@
-const SESSION_KEY = 'hearthline-session-v1'
-const configuredApiUrl = String(import.meta.env.VITE_API_URL || '').replace(/\/$/, '')
+import { SESSION_KEY } from './offline.js'
+
+const configuredApiUrl = String(import.meta.env?.VITE_API_URL || '').replace(/\/$/, '')
 
 export const apiBaseUrl = configuredApiUrl
 

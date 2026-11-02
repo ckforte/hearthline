@@ -322,6 +322,11 @@ p { line-height: 1.55; }
 .attachments { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 9px; }
 .attachments span { display: flex; align-items: center; gap: 5px; padding: 5px 7px; border-radius: 7px; background: #eeeee8; font-size: 9px; }
 .attachments img { width: 22px; height: 22px; object-fit: cover; border-radius: 4px; }
+.record-storage-note, .legacy-attachment-note { display: flex; align-items: flex-start; gap: 8px; padding: 11px 12px; border-radius: 10px; background: #edf2ec; color: #52685f; font-size: 12px; line-height: 1.45; }
+.record-storage-note svg, .legacy-attachment-note svg { flex: 0 0 auto; color: #477466; }
+.legacy-attachment-note { margin-top: 10px; background: #f3eee7; color: #755f4f; }
+.trusted-device-note { display: flex; align-items: flex-start; gap: 8px; margin-bottom: 10px; padding: 11px 12px; border-radius: 10px; background: #edf2ec; color: #52685f; font-size: 12px; line-height: 1.45; }
+.trusted-device-note svg { flex: 0 0 auto; color: #477466; }
 
 .pet-tabs { display: grid; grid-template-columns: repeat(4, 1fr); gap: 8px; margin-bottom: 13px; }
 .pet-tabs button { display: flex; align-items: center; gap: 10px; padding: 10px; border: 1px solid var(--line); border-radius: 13px; background: rgba(255,255,255,.4); color: var(--ink); text-align: left; }

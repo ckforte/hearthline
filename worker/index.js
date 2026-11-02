@@ -12,6 +12,8 @@ const DATA_SECTIONS = new Set([
   'recommendations', 'history', 'pets', 'goals', 'inbox', 'settings',
 ])
 
+export const householdHasAccountSpace = count => Number(count || 0) < 2
+
 export default {
   async fetch(request, env, ctx) {
     const url = new URL(request.url)
@@ -93,7 +95,7 @@ async function joinHousehold(request, env, ctx) {
   const household = await env.DB.prepare('SELECT id, name, invite_code FROM households WHERE invite_code = ?').bind(inviteCode).first()
   if (!household) return json({ error: 'That household invite code is not valid.' }, 403, request, env)
   const count = await env.DB.prepare('SELECT COUNT(*) AS count FROM users WHERE household_id = ?').bind(household.id).first()
-  if (Number(count?.count || 0) >= 2) return json({ error: 'This household already has its two permanent accounts.' }, 409, request, env)
+  if (!householdHasAccountSpace(count?.count)) return json({ error: 'This household already has its two permanent accounts.' }, 409, request, env)
 
   const existing = await env.DB.prepare('SELECT id FROM users WHERE email = ? COLLATE NOCASE').bind(account.email).first()
   if (existing) return json({ error: 'An account already exists for that email.' }, 409, request, env)

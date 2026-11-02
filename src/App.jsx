@@ -6,6 +6,8 @@ import {
   PawPrint, Plus, Settings, ShieldCheck, Sparkles, Sun, Trash2, UserRound, Users, Wrench, X,
 } from 'lucide-react'
 import { effortOptions, seededData } from './data'
+import { HOUSEHOLD_CACHE_KEY } from './offline'
+import { confirmRoutine, taskFromForm, toggleTaskCompletion, updateRoutineItem, upsertTask } from './model'
 
 const NAV_ITEMS = [
   ['today', 'Today', Sun], ['plan', 'Plan', ClipboardList], ['pets', 'Pets', PawPrint], ['home', 'Home', Home],
@@ -41,7 +43,7 @@ const capacityLimit = { low: 5, moderate: 9, high: 15 }
 
 function loadState() {
   try {
-    const saved = localStorage.getItem('hearthline-state-v1')
+    const saved = localStorage.getItem(HOUSEHOLD_CACHE_KEY)
     return saved ? JSON.parse(saved) : seededData()
   } catch {
     return seededData()
@@ -115,8 +117,11 @@ function App({ cloud = null, remoteData = null, remoteRevision = 0, onDataChange
     setData(structuredClone(remoteData))
   }, [remoteData, remoteRevision])
   useEffect(() => {
-    localStorage.setItem('hearthline-state-v1', JSON.stringify(data))
-    if (!onDataChange) return
+    if (!onDataChange) {
+      localStorage.setItem(HOUSEHOLD_CACHE_KEY, JSON.stringify(data))
+      return
+    }
+    localStorage.removeItem(HOUSEHOLD_CACHE_KEY)
     if (applyingRemote.current) { applyingRemote.current = false; return }
     const timer = setTimeout(() => onDataChange(data), 450)
     return () => clearTimeout(timer)
@@ -136,22 +141,14 @@ function App({ cloud = null, remoteData = null, remoteRevision = 0, onDataChange
   const notify = (message) => setToast(message)
 
   const completeTask = (taskId) => {
-    update(next => { const task = next.tasks.find(t => t.id === taskId); if (task) task.status = task.status === 'complete' ? 'open' : 'complete' })
+    update(next => { next.tasks = toggleTaskCompletion(next.tasks, taskId) })
   }
   const claimTask = (taskId, person) => {
     update(next => { const task = next.tasks.find(t => t.id === taskId); if (task) task.claimedBy = task.claimedBy === person ? '' : person })
   }
   const deleteTask = (taskId) => update(next => { next.tasks = next.tasks.filter(t => t.id !== taskId) })
   const saveTask = (form, existing) => update(next => {
-    const task = {
-      id: existing?.id || uid('task'), title: form.get('title'), explanation: form.get('explanation'),
-      category: form.get('category'), minutes: Number(form.get('minutes')) || 15, effort: Number(form.get('effort')) || 1,
-      dueWindow: form.get('dueWindow'), timing: form.get('timing'), setting: form.get('setting'), help: form.get('help'),
-      cost: form.get('cost'), priority: form.get('priority'), claimedBy: existing?.claimedBy || '', status: existing?.status || 'open',
-      date: form.get('date'), timeSensitive: form.get('timeSensitive') === 'on', goalId: existing?.goalId,
-    }
-    if (existing) next.tasks = next.tasks.map(t => t.id === existing.id ? task : t)
-    else next.tasks.push(task)
+    next.tasks = upsertTask(next.tasks, taskFromForm(form, existing, uid('task')))
   })
   const deferTask = (task, reason, suggestion) => update(next => {
     const target = next.tasks.find(t => t.id === task.id)
@@ -258,8 +255,8 @@ function TodayView({ data, update, setModal, completeTask, navigate }) {
 function RoutineCard({ period, routine, update }) {
   const [expanded, setExpanded] = useState(false)
   const complete = routine.items.every(i => i.status === 'given')
-  const updateItem = (id, status) => update(next => { const item = next.routines[period].items.find(i => i.id === id); if (item) item.status = status })
-  const completeAll = () => update(next => { next.routines[period].items.forEach(i => i.status = 'given') })
+  const updateItem = (id, status) => update(next => { next.routines = updateRoutineItem(next.routines, period, id, status) })
+  const completeAll = () => update(next => { next.routines = confirmRoutine(next.routines, period) })
   return <div className={`routine-card ${complete ? 'complete' : ''}`}>
     <div className="routine-top"><button className="routine-title" onClick={() => setExpanded(v => !v)}><span className={`routine-symbol ${period}`} >{period === 'morning' ? <Sun size={19} /> : <Moon size={19} />}</span><div><strong>{titleCase(period)} routine</strong><span>{routine.time} · {complete ? 'Confirmed' : `${routine.items.filter(i => i.status === 'given').length} of ${routine.items.length} confirmed`}</span></div>{expanded ? <ChevronDown size={18} /> : <ChevronRight size={18} />}</button>
       <Button variant={complete ? 'quiet' : 'soft'} icon={complete ? Check : undefined} onClick={completeAll}>{complete ? 'All given' : 'Confirm all'}</Button></div>
@@ -392,9 +389,9 @@ function HomeProfile({ profile, editing, onEdit, onCancel, onSave }) {
 }
 
 function HistoryView({ history, showForm, setShowForm, update, notify }) {
-  const save = e => { e.preventDefault(); const form = new FormData(e.currentTarget); const input = e.currentTarget.elements.files; const files = [...input.files].map(file => ({ name: file.name, size: file.size, type: file.type, preview: file.type.startsWith('image/') ? URL.createObjectURL(file) : '' })); update(next => next.history.unshift({ id: uid('history'), title: form.get('title'), date: form.get('date'), provider: form.get('provider'), notes: form.get('notes'), next: form.get('next'), files })); setShowForm(false); notify('Home record saved') }
+  const save = e => { e.preventDefault(); const form = new FormData(e.currentTarget); update(next => next.history.unshift({ id: uid('history'), title: form.get('title'), date: form.get('date'), provider: form.get('provider'), notes: form.get('notes'), next: form.get('next') })); setShowForm(false); notify('Home record saved') }
   if (!history.length && !showForm) return <div className="history-wrap"><div className="section-heading"><div><span className="eyebrow">Home memory</span><h2>Service & records</h2><p>Add a record when real household work happens.</p></div><Button icon={Plus} onClick={() => setShowForm(true)}>Add record</Button></div><EmptyState icon={Archive} title="No service records yet" text="Dates, providers, and next actions will appear here after you add them." /></div>
-  return <div className="history-wrap"><div className="section-heading"><div><span className="eyebrow">Home memory</span><h2>Service & records</h2><p>Keep dates, providers, notes, manuals, and next actions together.</p></div><Button icon={Plus} onClick={() => setShowForm(true)}>Add record</Button></div>{showForm && <form className="history-form card" onSubmit={save}><div className="form-grid"><label>Service or record<input name="title" required autoFocus /></label><label>Date<input type="date" name="date" required /></label><label>Provider<input name="provider" placeholder="Optional" /></label><label>Next expected action<input name="next" placeholder="e.g. Service next fall" /></label><label className="span-2">Notes<textarea name="notes" rows="3" /></label><label className="span-2 file-label">Photos, receipts, or manuals<input type="file" name="files" multiple accept="image/*,.pdf" /><small>For this local draft, Hearthline stores file names and temporary image previews on this device.</small></label><div className="form-actions span-2"><Button type="button" variant="outline" onClick={() => setShowForm(false)}>Cancel</Button><Button type="submit">Save record</Button></div></div></form>}<div className="history-timeline">{history.map(item => <article key={item.id}><div className="timeline-dot" /><div className="history-date">{shortDate(item.date)}</div><div className="history-card"><div><h3>{item.title}</h3><p>{item.provider || 'No provider recorded'}</p></div><p>{item.notes}</p>{item.files?.length > 0 && <div className="attachments">{item.files.map(file => <span key={file.name}>{file.preview ? <img src={file.preview} alt="" /> : <Archive size={16} />}{file.name}</span>)}</div>}<div className="next-action"><ArrowRight size={16} /><span><strong>Next:</strong> {item.next || 'No next action set'}</span></div></div><IconButton label="Delete record" onClick={() => update(next => { next.history = next.history.filter(h => h.id !== item.id) })}><Trash2 size={17} /></IconButton></article>)}</div></div>
+  return <div className="history-wrap"><div className="section-heading"><div><span className="eyebrow">Home memory</span><h2>Service & records</h2><p>Keep dates, providers, notes, and next actions together.</p></div><Button icon={Plus} onClick={() => setShowForm(true)}>Add record</Button></div>{showForm && <form className="history-form card" onSubmit={save}><div className="form-grid"><label>Service or record<input name="title" required autoFocus /></label><label>Date<input type="date" name="date" required /></label><label>Provider<input name="provider" placeholder="Optional" /></label><label>Next expected action<input name="next" placeholder="e.g. Service next fall" /></label><label className="span-2">Notes<textarea name="notes" rows="3" /></label><div className="record-storage-note span-2"><ShieldCheck size={17} /><span>Hearthline stores text records only. Keep receipts, photos, and manuals in your usual file storage.</span></div><div className="form-actions span-2"><Button type="button" variant="outline" onClick={() => setShowForm(false)}>Cancel</Button><Button type="submit">Save record</Button></div></div></form>}<div className="history-timeline">{history.map(item => <article key={item.id}><div className="timeline-dot" /><div className="history-date">{shortDate(item.date)}</div><div className="history-card"><div><h3>{item.title}</h3><p>{item.provider || 'No provider recorded'}</p></div><p>{item.notes}</p>{item.files?.length > 0 && <div className="legacy-attachment-note"><Archive size={16} /><span>An earlier version referenced attachments here, but those files were never uploaded or stored.</span></div>}<div className="next-action"><ArrowRight size={16} /><span><strong>Next:</strong> {item.next || 'No next action set'}</span></div></div><IconButton label="Delete record" onClick={() => update(next => { next.history = next.history.filter(h => h.id !== item.id) })}><Trash2 size={17} /></IconButton></article>)}</div></div>
 }
 
 function PetCreateForm({ onCancel, onSave }) {
@@ -500,12 +497,12 @@ function SuggestionEditor({ item, onChange }) {
 function SettingsView({ data, update, notify, cloud }) {
   const [confirmReset, setConfirmReset] = useState(false)
   const savePeople = e => { e.preventDefault(); const f = new FormData(e.currentTarget); update(next => { const old = [...next.adults]; next.brandName = f.get('brandName') || 'Hearthline'; next.adults = [f.get('adult1') || 'You', f.get('adult2') || 'Household partner']; next.capacity[next.adults[0]] = next.capacity[old[0]] || { level: 'moderate', unavailable: '', note: '' }; next.capacity[next.adults[1]] = next.capacity[old[1]] || { level: 'moderate', unavailable: '', note: '' }; if (old[0] !== next.adults[0]) delete next.capacity[old[0]]; if (old[1] !== next.adults[1]) delete next.capacity[old[1]] }); notify('Household settings saved') }
-  const reset = () => { localStorage.removeItem('hearthline-state-v1'); window.location.reload() }
+  const reset = () => { localStorage.removeItem(HOUSEHOLD_CACHE_KEY); window.location.reload() }
   const copyInvite = async () => { await navigator.clipboard.writeText(cloud.household.invite_code); notify('Invite code copied') }
   return <div className="page settings-page"><PageHeader eyebrow="Settings" title="Make Hearthline yours" description={cloud ? 'Adjust the household and shared access.' : 'Adjust the household and local data.'} />
     <div className="settings-layout"><section className="settings-card"><div className="settings-heading"><span><Users /></span><div><h2>Household & app name</h2><p>The product name is provisional and can change whenever you like.</p></div></div><form className="form-grid" onSubmit={savePeople}><label className="span-2">App name<input name="brandName" defaultValue={data.brandName} /></label><label>First adult<input name="adult1" defaultValue={data.adults[0]} /></label><label>Second adult<input name="adult2" defaultValue={data.adults[1]} /></label><div className="form-actions span-2"><Button type="submit">Save names</Button></div></form></section>
       {cloud && <section className="settings-card cloud-account"><div className="settings-heading"><span><Users /></span><div><h2>Shared household access</h2><p>Each adult has a private account and shares the same live household.</p></div><Chip tone="sage">{cloud.status === 'saved' ? 'Saved' : cloud.status === 'offline' ? 'Offline' : titleCase(cloud.status)}</Chip></div><div className="cloud-details"><div><span>Household</span><strong>{cloud.household.name}</strong></div><div><span>Signed in as</span><strong>{cloud.user.email}</strong></div><div className="invite-code"><span>Invite the other person</span><strong>{cloud.household.invite_code}</strong><small>Share this code privately. It grants access after the second account is created.</small></div></div><div className="form-actions"><Button variant="outline" onClick={copyInvite}>Copy invite code</Button><Button variant="text" onClick={cloud.signOut}>Sign out</Button></div></section>}
-      <section className="settings-card"><div className="settings-heading"><span><ShieldCheck /></span><div><h2>Storage & privacy</h2><p>{cloud ? 'Household data is synchronized securely and cached on this device.' : 'This version stores household information only in this browser.'}</p></div></div><div className="setting-row"><div><strong>Gentle reminders</strong><p>Use calm language and avoid intimidating backlog counts.</p></div><label className="switch"><input type="checkbox" aria-label="Gentle reminders" checked={data.settings.gentleReminders} onChange={e => update(next => { next.settings.gentleReminders = e.target.checked })} /><span aria-hidden="true" /></label></div><div className="setting-row"><div><strong>Local starter data</strong><p>Clear this device and return to an empty starter household.</p></div>{confirmReset ? <div className="reset-confirm"><Button variant="danger" onClick={reset}>Yes, reset</Button><Button variant="text" onClick={() => setConfirmReset(false)}>Cancel</Button></div> : <Button variant="outline" onClick={() => setConfirmReset(true)}>Reset local data</Button>}</div></section>
+      <section className="settings-card"><div className="settings-heading"><span><ShieldCheck /></span><div><h2>Storage & privacy</h2><p>{cloud ? 'Household records stay in the shared service. This browser keeps only your sign-in and any unsaved offline changes.' : 'This version stores household information only in this browser.'}</p></div></div>{cloud && <div className="trusted-device-note"><ShieldCheck size={17} /><span>Stay signed in only on a trusted device. Signing out clears the session, household cache, and queued changes from this browser.</span></div>}<div className="setting-row"><div><strong>Gentle reminders</strong><p>Use calm language and avoid intimidating backlog counts.</p></div><label className="switch"><input type="checkbox" aria-label="Gentle reminders" checked={data.settings.gentleReminders} onChange={e => update(next => { next.settings.gentleReminders = e.target.checked })} /><span aria-hidden="true" /></label></div><div className="setting-row"><div><strong>Local starter data</strong><p>Clear this device and return to an empty starter household.</p></div>{confirmReset ? <div className="reset-confirm"><Button variant="danger" onClick={reset}>Yes, reset</Button><Button variant="text" onClick={() => setConfirmReset(false)}>Cancel</Button></div> : <Button variant="outline" onClick={() => setConfirmReset(true)}>Reset local data</Button>}</div></section>
     </div>
   </div>
 }

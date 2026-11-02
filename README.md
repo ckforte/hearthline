@@ -35,7 +35,9 @@ Run the automated conflict and reconciliation checks with:
 npm test
 ```
 
-The frontend reads `VITE_API_URL`. For local full-stack development, place the local Worker URL in `.env.local`, put a test `SETUP_TOKEN` in `.dev.vars`, apply the local D1 migration, and run `npm run worker:dev` alongside Vite.
+The single test command covers the two-account limit, session cleanup, section-version conflicts, task creation and completion, care confirmation, truthful text-only service records, and the critical mobile layout rules.
+
+The frontend reads `VITE_API_URL`. For local full-stack development, place the local Worker URL in `.env.local`, put a test `SETUP_TOKEN` in `.dev.vars`, apply the local D1 migration, and run `npm run worker:dev` alongside Vite. Signed-in browsers keep the session plus deliberately queued offline changes; signing out clears both and removes any legacy household cache.
 
 ## Deploy
 
