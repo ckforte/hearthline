@@ -52,6 +52,7 @@ export function seededData(options = {}) {
     routines: {
       morning: { time: '8:00 AM', status: 'open', items: routineItems('morning') },
       evening: { time: '7:30 PM', status: 'open', items: routineItems('evening') },
+      confirmations: [],
     },
     tasks,
     capacity: {
@@ -69,6 +70,6 @@ export function seededData(options = {}) {
     pets,
     goals: [],
     inbox: [],
-    settings: { weekStarts: 'Sunday', gentleReminders: true },
+    settings: { weekStarts: 'Sunday', gentleReminders: true, scopeReview: null },
   }
 }

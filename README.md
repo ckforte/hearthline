@@ -1,6 +1,6 @@
 # Hearthline
 
-Hearthline is a calm, responsive household-management app for two adults. It combines daily care, weekend capacity planning, calendars, home maintenance, pet care, goals, and a quick-capture inbox in one installable web app.
+Hearthline is a calm, responsive household coordinator for two adults. It keeps Today, one shared Plan, essential pet care, and useful home facts in one installable web app. Quick Add is available everywhere.
 
 ## Live architecture
 
@@ -35,7 +35,7 @@ Run the automated conflict and reconciliation checks with:
 npm test
 ```
 
-The single test command covers the two-account limit, session cleanup, section-version conflicts, task creation and completion, care confirmation, truthful text-only service records, and the critical mobile layout rules.
+The single test command covers the two-account limit, session cleanup, section-version conflicts, task creation and completion, recurrence, medication and routine confirmation, inbox migration, truthful text-only service records, install/update behavior, and critical mobile layout rules.
 
 The frontend reads `VITE_API_URL`. For local full-stack development, place the local Worker URL in `.env.local`, put a test `SETUP_TOKEN` in `.dev.vars`, apply the local D1 migration, and run `npm run worker:dev` alongside Vite. Signed-in browsers keep the session plus deliberately queued offline changes; signing out clears both and removes any legacy household cache.
 
@@ -49,3 +49,17 @@ npm run worker:deploy
 ```
 
 The production `SETUP_TOKEN` is stored as an encrypted Cloudflare Worker secret and is never committed to this repository.
+
+## Install, updates, and recovery
+
+- On iPhone or iPad, open Hearthline in Safari and choose **Share → Add to Home Screen**.
+- On supported Android and desktop browsers, choose **Install app** from Hearthline Settings or the browser menu.
+- The service worker keeps the last opened app shell available offline. Household changes made offline remain queued on that device until synchronization succeeds.
+- When a new version is ready, Hearthline shows a refresh action rather than replacing the running app mid-edit.
+- **Settings → Export household** downloads a readable JSON backup of the current household state.
+- Signing out clears the session, cached household state, and queued changes from that browser. Do not sign out while offline changes still need to synchronize.
+- A **Needs attention** state means both people changed the same information. Review the current screen before choosing which version to keep.
+
+## Two-week scope review
+
+Settings contains a shared two-week checklist for recording which core functions were used, which were ignored, repeated missing actions, friction in the daily loop, and at most one next experiment. Shopping remains deliberately unimplemented until both household members record a repeated need for it.

@@ -52,7 +52,7 @@ export function toggleTaskCompletion(tasks, taskId) {
     : task)
 }
 
-const toDateKey = date => date.toISOString().slice(0, 10)
+const toDateKey = date => `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}-${String(date.getDate()).padStart(2, '0')}`
 const fromTaskDate = (task, now) => /^\d{4}-\d{2}-\d{2}$/.test(task.date || '') ? new Date(`${task.date}T12:00:00`) : new Date(now)
 
 export function nextOccurrenceDate(task, completedAt = new Date()) {
@@ -127,22 +127,92 @@ export function buildPlanEntries(data, now = new Date()) {
   return result
 }
 
-export function updateRoutineItem(routines, period, itemId, status) {
-  return {
-    ...routines,
-    [period]: {
-      ...routines[period],
-      items: routines[period].items.map(item => item.id === itemId ? { ...item, status } : item),
-    },
+export function migrateInboxToTasks(data) {
+  const pending = (data.inbox || []).filter(item => item.status !== 'organized')
+  if (!pending.length) return data
+  const next = structuredClone(data)
+  next.tasks ||= []
+  next.inbox ||= []
+  const existingIds = new Set((next.tasks || []).map(task => task.id))
+  for (const item of pending) {
+    const id = `quick-${item.id}`
+    if (!existingIds.has(id)) {
+      const suggestedTiming = item.suggestion?.timing
+      const date = suggestedTiming === 'Today' ? 'Today' : suggestedTiming?.toLowerCase().includes('month') ? 'Later' : 'This week'
+      next.tasks.push({
+        id, title: item.text, explanation: '', category: 'Household', minutes: 15, effort: 1,
+        dueWindow: date, timing: 'Flexible', setting: 'indoor', help: 'either', cost: '',
+        priority: 'should', claimedBy: '', status: 'open', date, timeSensitive: date === 'Today',
+      })
+      existingIds.add(id)
+    }
   }
+  next.inbox = next.inbox.map(item => item.status === 'organized' ? item : { ...item, status: 'organized', migratedToPlan: true })
+  return next
 }
 
-export function confirmRoutine(routines, period) {
-  return {
-    ...routines,
-    [period]: {
-      ...routines[period],
-      items: routines[period].items.map(item => ({ ...item, status: 'given' })),
-    },
+export function routineForDate(routine, dateKey = toDateKey(new Date())) {
+  if (routine.date === dateKey) return routine
+  return { ...routine, date: dateKey, items: routine.items.map(item => ({ ...item, status: 'open', confirmedBy: undefined, confirmedAt: undefined })) }
+}
+
+function confirmationId(kind, parts, dateKey) {
+  return `${kind}:${parts.join(':')}:${dateKey}`
+}
+
+function addConfirmation(routines, record) {
+  const confirmations = routines.confirmations || []
+  return confirmations.some(item => item.id === record.id) ? routines : { ...routines, confirmations: [...confirmations, record] }
+}
+
+export function confirmPetMedication(routines, petId, petName, medication, slot, confirmedBy, confirmedAt = new Date()) {
+  const dateKey = toDateKey(new Date(confirmedAt))
+  const id = confirmationId('medication', [petId, slot], dateKey)
+  return addConfirmation(routines, { id, type: 'medication', petId, pet: petName, action: medication, slot, date: dateKey, confirmedBy, confirmedAt: new Date(confirmedAt).toISOString() })
+}
+
+export function buildDuePetCare(data, now = new Date()) {
+  const dateKey = toDateKey(new Date(now))
+  const confirmations = new Set((data.routines?.confirmations || []).map(item => item.id))
+  const items = []
+  for (const pet of data.pets || []) {
+    const medication = String(pet.medication || '').trim()
+    if (medication && !/^no current medication$/i.test(medication)) {
+      const slots = /morning.*evening|evening.*morning|twice/i.test(medication) ? ['morning', 'evening'] : ['daily']
+      for (const slot of slots) {
+        const confirmation = confirmationId('medication', [pet.id, slot], dateKey)
+        if (!confirmations.has(confirmation)) items.push({ id: confirmation, type: 'medication', petId: pet.id, pet: pet.name, title: medication, detail: slot === 'daily' ? 'Due today' : `${slot[0].toUpperCase()}${slot.slice(1)} dose`, slot })
+      }
+    }
+    const supplies = String(pet.supplies || '').trim()
+    if (supplies && !/^no supply reminder$/i.test(supplies) && !(data.tasks || []).some(task => task.sourcePetSupplyId === pet.id && task.sourcePetSupplyTitle === supplies)) {
+      items.push({ id: `supply:${pet.id}`, type: 'supply', petId: pet.id, pet: pet.name, title: supplies, detail: 'Supply need' })
+    }
+    const appointment = String(pet.appointment || '').trim()
+    if (appointment && !/^no appointment scheduled$/i.test(appointment)) items.push({ id: `appointment:${pet.id}`, type: 'appointment', petId: pet.id, pet: pet.name, title: appointment, detail: 'Upcoming appointment' })
   }
+  return items
+}
+
+export function updateRoutineItem(routines, period, itemId, status, confirmedBy = '', confirmedAt = new Date()) {
+  const dateKey = toDateKey(new Date(confirmedAt))
+  const current = routineForDate(routines[period], dateKey)
+  const target = current.items.find(item => item.id === itemId)
+  let next = { ...routines, [period]: { ...current, items: current.items.map(item => item.id === itemId ? { ...item, status, confirmedBy: status === 'given' ? confirmedBy : undefined, confirmedAt: status === 'given' ? new Date(confirmedAt).toISOString() : undefined } : item) } }
+  if (status === 'given' && target) {
+    const id = confirmationId('routine', [period, itemId], dateKey)
+    next = addConfirmation(next, { id, type: 'routine', period, itemId, pet: target.pet, action: target.action, date: dateKey, confirmedBy, confirmedAt: new Date(confirmedAt).toISOString() })
+  }
+  return next
+}
+
+export function confirmRoutine(routines, period, confirmedBy = '', confirmedAt = new Date()) {
+  const dateKey = toDateKey(new Date(confirmedAt))
+  const current = routineForDate(routines[period], dateKey)
+  let next = { ...routines, [period]: { ...current, items: current.items.map(item => ({ ...item, status: 'given', confirmedBy, confirmedAt: new Date(confirmedAt).toISOString() })) } }
+  for (const item of current.items) {
+    const id = confirmationId('routine', [period, item.id], dateKey)
+    next = addConfirmation(next, { id, type: 'routine', period, itemId: item.id, pet: item.pet, action: item.action, date: dateKey, confirmedBy, confirmedAt: new Date(confirmedAt).toISOString() })
+  }
+  return next
 }

@@ -1,7 +1,7 @@
 {
   "name": "Hearthline",
   "short_name": "Hearthline",
-  "description": "A calm, shared home operating system.",
+  "description": "See what matters at home today, share the next action, and remember recurring care.",
   "start_url": "./",
   "scope": "./",
   "display": "standalone",

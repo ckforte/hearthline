@@ -72,7 +72,7 @@ test('critical controls remain present in the 390px mobile layout', async () => 
   assert.match(styles, /\.task-actions \{ position: relative; display: block; \}/)
   assert.match(styles, /\.modal, \.modal\.wide \{ width: 100%; max-height: 92vh;/)
   assert.match(app, /className="mobile-header"/)
-  assert.match(app, /aria-label="Gentle reminders"/)
+  assert.match(app, /aria-label="Quick Add"/)
 })
 
 test('service records do not create temporary attachment URLs', async () => {

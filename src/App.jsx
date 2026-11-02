@@ -1,13 +1,13 @@
-import { useEffect, useMemo, useRef, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import {
   Archive, ArrowRight, CalendarDays, Check, CheckCircle2, ChevronDown, ChevronRight,
-  CircleDollarSign, ClipboardList, Clock3, CloudSun, Dog, Edit3, Flame, FolderHeart,
-  Goal, HeartPulse, Home, Inbox, Info, Leaf, Menu, Mic, MicOff, Minus, Moon, MoreHorizontal,
-  PawPrint, Plus, Settings, ShieldCheck, Sparkles, Sun, Trash2, UserRound, Users, Wrench, X,
+  CircleDollarSign, ClipboardList, Clock3, CloudSun, Dog, Download, Edit3, Flame, FolderHeart,
+  Goal, HeartPulse, Home, Info, Leaf, Menu, Mic, Minus, Moon, MoreHorizontal,
+  PawPrint, Plus, RefreshCw, Settings, ShieldCheck, Smartphone, Sparkles, Sun, Trash2, UserRound, Users, Wrench, X,
 } from 'lucide-react'
 import { seededData } from './data'
 import { HOUSEHOLD_CACHE_KEY } from './offline'
-import { assignTask, buildPlanEntries, completeTaskWithRecurrence, confirmRoutine, deferTaskToLater, taskFromForm, updateRoutineItem, upsertTask } from './model'
+import { assignTask, buildDuePetCare, buildPlanEntries, completeTaskWithRecurrence, confirmPetMedication, confirmRoutine, deferTaskToLater, migrateInboxToTasks, routineForDate, taskFromForm, updateRoutineItem, upsertTask } from './model'
 
 const NAV_ITEMS = [
   ['today', 'Today', Sun], ['plan', 'Plan', ClipboardList], ['pets', 'Pets', PawPrint], ['home', 'Home', Home],
@@ -35,7 +35,7 @@ const capacityLimit = { low: 5, moderate: 9, high: 15 }
 function loadState() {
   try {
     const saved = localStorage.getItem(HOUSEHOLD_CACHE_KEY)
-    return saved ? JSON.parse(saved) : seededData()
+    return migrateInboxToTasks(saved ? JSON.parse(saved) : seededData())
   } catch {
     return seededData()
   }
@@ -100,13 +100,25 @@ function App({ cloud = null, remoteData = null, remoteRevision = 0, onDataChange
   const [modal, setModal] = useState(null)
   const [toast, setToast] = useState('')
   const [displayMode, setDisplayMode] = useState(null)
+  const [installPrompt, setInstallPrompt] = useState(null)
+  const [updateRegistration, setUpdateRegistration] = useState(null)
   const applyingRemote = useRef(false)
 
   useEffect(() => {
     if (!remoteData || !remoteRevision) return
-    applyingRemote.current = true
-    setData(structuredClone(remoteData))
+    const source = structuredClone(remoteData)
+    const migrated = migrateInboxToTasks(source)
+    applyingRemote.current = JSON.stringify(source) === JSON.stringify(migrated)
+    setData(migrated)
   }, [remoteData, remoteRevision])
+  useEffect(() => {
+    const onInstall = event => { event.preventDefault(); setInstallPrompt(event) }
+    const onUpdate = event => setUpdateRegistration(event.detail)
+    window.addEventListener('beforeinstallprompt', onInstall)
+    window.addEventListener('hearthline-update-ready', onUpdate)
+    if (window.__hearthlineUpdateRegistration) setUpdateRegistration(window.__hearthlineUpdateRegistration)
+    return () => { window.removeEventListener('beforeinstallprompt', onInstall); window.removeEventListener('hearthline-update-ready', onUpdate) }
+  }, [])
   useEffect(() => {
     if (!onDataChange) {
       localStorage.setItem(HOUSEHOLD_CACHE_KEY, JSON.stringify(data))
@@ -130,6 +142,13 @@ function App({ cloud = null, remoteData = null, remoteRevision = 0, onDataChange
   })
   const navigate = (next) => { setView(next); setMobileNav(false); window.scrollTo({ top: 0, behavior: 'smooth' }) }
   const notify = (message) => setToast(message)
+  const installApp = async () => {
+    if (!installPrompt) return false
+    await installPrompt.prompt()
+    const choice = await installPrompt.userChoice
+    if (choice.outcome === 'accepted') setInstallPrompt(null)
+    return choice.outcome === 'accepted'
+  }
 
   const completeTask = (taskId) => {
     update(next => { next.tasks = completeTaskWithRecurrence(next.tasks, taskId, new Date()) })
@@ -145,12 +164,15 @@ function App({ cloud = null, remoteData = null, remoteRevision = 0, onDataChange
   const saveTask = (form, existing) => update(next => {
     next.tasks = upsertTask(next.tasks, taskFromForm(form, existing, uid('task')))
   })
+  const saveQuickAdd = (title, timing) => update(next => {
+    next.tasks.push({ id: uid('task'), title, explanation: '', category: 'Household', minutes: 15, effort: 1, dueWindow: timing, timing: 'Flexible', setting: 'indoor', help: 'either', cost: '', priority: 'should', claimedBy: '', status: 'open', date: timing, timeSensitive: timing === 'Today' })
+  })
   const deferTask = (task, reason, suggestion) => update(next => {
     const target = next.tasks.find(t => t.id === task.id)
     if (target) { target.status = 'deferred'; target.deferReason = reason; target.dueWindow = suggestion; target.date = 'Upcoming' }
   })
 
-  const navProps = { data, update, setModal, notify, completeTask, claimTask, quickDeferTask, deleteTask, navigate, setDisplayMode, cloud }
+  const navProps = { data, update, setModal, notify, completeTask, claimTask, quickDeferTask, deleteTask, navigate, setDisplayMode, cloud, installPrompt, installApp }
   const views = {
     today: <TodayView {...navProps} />,
     plan: <PlanView {...navProps} />,
@@ -159,7 +181,6 @@ function App({ cloud = null, remoteData = null, remoteRevision = 0, onDataChange
     home: <HomeView {...navProps} />,
     pets: <PetsView {...navProps} />,
     goals: <GoalsView {...navProps} />,
-    inbox: <InboxView {...navProps} />,
     settings: <SettingsView {...navProps} />,
     finances: <FinancesView />,
   }
@@ -168,7 +189,7 @@ function App({ cloud = null, remoteData = null, remoteRevision = 0, onDataChange
     <aside className={`sidebar ${mobileNav ? 'open' : ''}`}>
       <div className="brand"><span className="brand-mark"><Flame size={21} /></span><div><strong>{data.brandName}</strong><small>Home, held together</small></div></div>
       <nav aria-label="Primary navigation">
-        {NAV_ITEMS.map(([id, label, Icon]) => <button key={id} className={view === id ? 'active' : ''} onClick={() => navigate(id)}><Icon size={19} /><span>{label}</span>{id === 'plan' && data.inbox.some(i => i.status === 'unorganized') && <i>{data.inbox.filter(i => i.status === 'unorganized').length}</i>}</button>)}
+        {NAV_ITEMS.map(([id, label, Icon]) => <button key={id} className={view === id ? 'active' : ''} onClick={() => navigate(id)}><Icon size={19} /><span>{label}</span></button>)}
       </nav>
       <div className="sidebar-footer">
         <button className={`account-control ${view === 'settings' ? 'active' : ''}`} onClick={() => navigate('settings')} aria-label="Open household settings"><UserRound size={18} /><span><strong>{cloud?.user?.display_name || data.adults[0]}</strong><small>Account & settings</small></span><Settings size={16} /></button>
@@ -180,9 +201,13 @@ function App({ cloud = null, remoteData = null, remoteRevision = 0, onDataChange
     <main className="main-shell">
       <header className="mobile-header"><IconButton label="Open menu" onClick={() => setMobileNav(true)}><Menu /></IconButton><strong>{data.brandName}</strong><span /></header>
       {cloud?.status === 'attention' && <div className="sync-alert" role="alert"><div><strong>A newer household change was saved first.</strong><span>Your change is paused so nothing is overwritten silently. Review this screen, then keep your change only if it should replace the newer version.</span></div><Button variant="light" onClick={cloud.retry}>Keep my changes</Button></div>}
+      {cloud?.status === 'offline' && <div className="offline-alert" role="status"><div><strong>You’re offline, but Hearthline still works.</strong><span>Your changes are waiting safely on this device and will save when the connection returns.</span></div><Button variant="light" onClick={cloud.retry}>Try again</Button></div>}
+      {updateRegistration && <div className="update-alert" role="status"><div><strong>A Hearthline update is ready.</strong><span>Refresh when convenient. Your saved and offline changes will remain intact.</span></div><Button variant="light" icon={RefreshCw} onClick={() => updateRegistration.waiting?.postMessage({ type: 'SKIP_WAITING' })}>Refresh now</Button></div>}
       {views[view]}
     </main>
+    <button className="quick-add-button" onClick={() => setModal({ type: 'quick' })} aria-label="Quick Add"><Plus size={20} /><span>Quick Add</span></button>
     {modal?.type === 'task' && <TaskModal task={modal.task} adults={data.adults} onClose={() => setModal(null)} onSave={(form) => { saveTask(form, modal.task?.id && !modal.isNew ? modal.task : null); setModal(null); notify(modal.task?.id && !modal.isNew ? 'Task updated' : 'Task added') }} />}
+    {modal?.type === 'quick' && <QuickAddModal onClose={() => setModal(null)} onSave={(title, timing) => { saveQuickAdd(title, timing); setModal(null); notify('Added to Plan') }} />}
     {modal?.type === 'defer' && <DeferModal task={modal.task} onClose={() => setModal(null)} onConfirm={(reason, timing) => { deferTask(modal.task, reason, timing); setModal(null); notify('Rescheduled with your approval') }} />}
     {modal?.type === 'event' && <EventModal event={modal.event} adults={data.adults} onClose={() => setModal(null)} onSave={(event) => { update(next => { next.events = modal.event ? next.events.map(e => e.id === modal.event.id ? event : e) : [...next.events, event] }); setModal(null); notify('Calendar updated') }} />}
     {modal?.type === 'goal' && <GoalModal goal={modal.goal} onClose={() => setModal(null)} onSave={(goal) => { update(next => { next.goals = modal.goal ? next.goals.map(g => g.id === modal.goal.id ? goal : g) : [...next.goals, goal] }); setModal(null); notify('Goal saved') }} />}
@@ -243,25 +268,41 @@ function PlanView({ data, update, setModal, completeTask, claimTask, quickDeferT
       </article>)}
       {!entries[section].length && <EmptyState icon={section === 'completed' ? CheckCircle2 : ClipboardList} title={section === 'completed' ? 'Nothing completed yet' : 'This part of the plan is clear'} text="Add something only when it would genuinely help the household coordinate." />}
     </section>
-    {data.inbox.some(item => item.status === 'unorganized') && <button className="plan-inbox-link" onClick={() => navigate('inbox')}><Inbox size={17} /><span><strong>{data.inbox.filter(item => item.status === 'unorganized').length} captured thoughts</strong><small>Review them when you are ready.</small></span><ArrowRight size={17} /></button>}
   </div>
 }
 
-function TodayView({ data, update, setModal, completeTask, claimTask, quickDeferTask, deleteTask, navigate, cloud }) {
+function TodayView({ data, update, setModal, notify, completeTask, claimTask, quickDeferTask, deleteTask, navigate, cloud }) {
   const priorityOrder = { must: 0, should: 1, could: 2 }
+  const now = new Date()
+  const currentUser = cloud?.user?.display_name || data.adults[0]
   const todayTaskIds = new Set(buildPlanEntries(data).today.filter(entry => entry.type === 'task').map(entry => entry.task.id))
   const importantTasks = [...data.tasks]
     .filter(task => task.status === 'open' && (todayTaskIds.has(task.id) || task.timeSensitive))
     .sort((a, b) => Number(Boolean(b.timeSensitive)) - Number(Boolean(a.timeSensitive)) || (priorityOrder[a.priority] ?? 3) - (priorityOrder[b.priority] ?? 3))
     .slice(0, 3)
-  const openRoutines = Object.entries(data.routines).filter(([, routine]) => routine.items.some(item => item.status !== 'given'))
+  const openRoutines = Object.entries(data.routines).filter(([, routine]) => routine?.items && routineForDate(routine, `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(now.getDate()).padStart(2, '0')}`).items.some(item => item.status !== 'given'))
+  const petCare = buildDuePetCare(data, now)
+  const confirmMedication = item => {
+    update(next => { next.routines = confirmPetMedication(next.routines, item.petId, item.pet, item.title, item.slot, currentUser, new Date()) })
+    notify(`Confirmed by ${currentUser}`)
+  }
+  const addSupplyToPlan = item => {
+    update(next => {
+      if (next.tasks.some(task => task.sourcePetSupplyId === item.petId && task.sourcePetSupplyTitle === item.title)) return
+      const supplyKey = item.title.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '').slice(0, 40) || 'supply'
+      next.tasks.push({ id: `pet-supply-${item.petId}-${supplyKey}`, title: item.title, explanation: `Supply need for ${item.pet}.`, category: 'Pets', minutes: 15, effort: 1, dueWindow: 'This week', timing: 'Flexible', setting: 'indoor', help: 'either', cost: '', priority: 'should', claimedBy: '', status: 'open', date: 'This week', timeSensitive: false, sourcePetSupplyId: item.petId, sourcePetSupplyTitle: item.title })
+    })
+    notify('Supply need added to Plan')
+  }
   const todayKey = new Date().toISOString().slice(0, 10)
   const upcoming = [...data.events].filter(event => event.date >= todayKey).sort((a, b) => a.date.localeCompare(b.date) || a.time.localeCompare(b.time))[0]
   return <div className="page today-page">
     <PageHeader eyebrow={friendlyDate()} title="What matters today" description="Care, a few important actions, and the next commitment—everything else can wait in Plan." actions={<Button variant="soft" icon={Plus} onClick={() => setModal({ type: 'task' })}>Add item</Button>} />
     <div className="today-grid">
-      <section className="stack-card routines-panel"><div className="section-heading"><div><span className="eyebrow">Due care</span><h2>Pet routines</h2></div><PawPrint size={21} /></div>
-        {openRoutines.length ? openRoutines.map(([period, routine]) => <RoutineCard key={period} period={period} routine={routine} update={update} />) : data.pets.length ? <EmptyState icon={ShieldCheck} title="Pet care is covered" text="Nothing else needs confirmation right now." /> : <EmptyState icon={PawPrint} title="No pet care added" text="This stays quiet until a real pet profile is added." />}
+      <section className="stack-card routines-panel"><div className="section-heading"><div><span className="eyebrow">Due care</span><h2>Pet care</h2></div><PawPrint size={21} /></div>
+        {petCare.length > 0 && <div className="pet-care-today">{petCare.map(item => <article key={item.id}><span className={`pet-care-type ${item.type}`}>{item.type === 'medication' ? <HeartPulse size={17} /> : item.type === 'appointment' ? <CalendarDays size={17} /> : <Archive size={17} />}</span><div><strong>{item.pet}: {item.title}</strong><small>{item.detail}</small></div>{item.type === 'medication' && <Button variant="soft" icon={Check} onClick={() => confirmMedication(item)}>Confirm</Button>}{item.type === 'supply' && <Button variant="outline" onClick={() => addSupplyToPlan(item)}>Add to Plan</Button>}{item.type === 'appointment' && <Button variant="text" onClick={() => navigate('pets')}>View</Button>}</article>)}</div>}
+        {openRoutines.map(([period, routine]) => <RoutineCard key={period} period={period} routine={routine} update={update} currentUser={currentUser} />)}
+        {!petCare.length && !openRoutines.length && (data.pets.length ? <EmptyState icon={ShieldCheck} title="Pet care is covered" text="Nothing else needs confirmation right now." /> : <EmptyState icon={PawPrint} title="No pet care added" text="This stays quiet until a real pet profile is added." />)}
       </section>
       <section className="stack-card"><div className="section-heading"><div><span className="eyebrow">Up next</span><h2>Important actions</h2></div><Clock3 size={21} /></div>
         <div className="task-list compact">
@@ -277,15 +318,18 @@ function TodayView({ data, update, setModal, completeTask, claimTask, quickDefer
   </div>
 }
 
-function RoutineCard({ period, routine, update }) {
+function RoutineCard({ period, routine, update, currentUser }) {
   const [expanded, setExpanded] = useState(false)
-  const complete = routine.items.every(i => i.status === 'given')
-  const updateItem = (id, status) => update(next => { next.routines = updateRoutineItem(next.routines, period, id, status) })
-  const completeAll = () => update(next => { next.routines = confirmRoutine(next.routines, period) })
+  const now = new Date()
+  const dateKey = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(now.getDate()).padStart(2, '0')}`
+  const todayRoutine = routineForDate(routine, dateKey)
+  const complete = todayRoutine.items.every(i => i.status === 'given')
+  const updateItem = (id, status) => update(next => { next.routines = updateRoutineItem(next.routines, period, id, status, currentUser, new Date()) })
+  const completeAll = () => update(next => { next.routines = confirmRoutine(next.routines, period, currentUser, new Date()) })
   return <div className={`routine-card ${complete ? 'complete' : ''}`}>
-    <div className="routine-top"><button className="routine-title" onClick={() => setExpanded(v => !v)}><span className={`routine-symbol ${period}`} >{period === 'morning' ? <Sun size={19} /> : <Moon size={19} />}</span><div><strong>{titleCase(period)} routine</strong><span>{routine.time} · {complete ? 'Confirmed' : `${routine.items.filter(i => i.status === 'given').length} of ${routine.items.length} confirmed`}</span></div>{expanded ? <ChevronDown size={18} /> : <ChevronRight size={18} />}</button>
+    <div className="routine-top"><button className="routine-title" onClick={() => setExpanded(v => !v)}><span className={`routine-symbol ${period}`} >{period === 'morning' ? <Sun size={19} /> : <Moon size={19} />}</span><div><strong>{titleCase(period)} routine</strong><span>{routine.time} · {complete ? 'Confirmed' : `${todayRoutine.items.filter(i => i.status === 'given').length} of ${todayRoutine.items.length} confirmed`}</span></div>{expanded ? <ChevronDown size={18} /> : <ChevronRight size={18} />}</button>
       <Button variant={complete ? 'quiet' : 'soft'} icon={complete ? Check : undefined} onClick={completeAll}>{complete ? 'All given' : 'Confirm all'}</Button></div>
-    {expanded && <div className="routine-items">{routine.items.map(item => <div key={item.id} className="routine-item"><div><strong>{item.pet}</strong><span>{item.action}</span></div><select aria-label={`Status for ${item.pet}`} value={item.status} onChange={e => updateItem(item.id, e.target.value)}><option value="open">Still open</option><option value="given">Given</option><option value="soon">I’ll do it soon</option><option value="ask">Ask the other person</option><option value="problem">Problem or skipped</option></select></div>)}<p className="human-note"><Info size={14} /> Medication is only marked given after a person confirms it.</p></div>}
+    {expanded && <div className="routine-items">{todayRoutine.items.map(item => <div key={item.id} className="routine-item"><div><strong>{item.pet}</strong><span>{item.action}{item.status === 'given' && item.confirmedBy ? ` · Confirmed by ${item.confirmedBy}` : ''}</span></div><select aria-label={`Status for ${item.pet}`} value={item.status} onChange={e => updateItem(item.id, e.target.value)}><option value="open">Still open</option><option value="given">Given</option><option value="soon">I’ll do it soon</option><option value="ask">Ask the other person</option><option value="problem">Problem or skipped</option></select></div>)}<p className="human-note"><Info size={14} /> Care is only marked complete after a person confirms it.</p></div>}
   </div>
 }
 
@@ -355,6 +399,18 @@ function TaskModal({ task, adults, onClose, onSave }) {
   </Modal>
 }
 
+function QuickAddModal({ onClose, onSave }) {
+  const [title, setTitle] = useState('')
+  const [timing, setTiming] = useState('This week')
+  return <Modal title="Quick Add" subtitle="Capture one useful action. You can refine it later." onClose={onClose}>
+    <form className="quick-add-form" onSubmit={event => { event.preventDefault(); const clean = title.trim(); if (clean) onSave(clean, timing) }}>
+      <label>What needs doing?<input value={title} onChange={event => setTitle(event.target.value)} placeholder="Pick up the refill" required autoFocus /></label>
+      <label>When? <span>optional</span><select value={timing} onChange={event => setTiming(event.target.value)}><option>Today</option><option>This week</option><option>Later</option></select></label>
+      <div className="form-actions"><Button type="button" variant="outline" onClick={onClose}>Cancel</Button><Button type="submit" disabled={!title.trim()}>Add to Plan</Button></div>
+    </form>
+  </Modal>
+}
+
 function DeferModal({ task, onClose, onConfirm }) {
   const [reason, setReason] = useState('Not enough time')
   const suggestionMap = { 'Not enough time': 'Next weekend', 'Not enough energy': 'A lower-capacity day next week', Weather: 'Next dry-weather window', 'Waiting on someone or something': 'Review in one week', 'Too expensive right now': 'Review next month', 'No longer relevant': 'Archive without rescheduling', 'Suggested timing was wrong': 'Choose a better date', Other: 'Review next week' }
@@ -386,26 +442,21 @@ function EventModal({ event, adults, onClose, onSave }) {
   return <Modal title={event ? 'Edit event' : 'Add an event'} onClose={onClose}><form className="form-grid" onSubmit={submit}><label className="span-2">Title<input name="title" defaultValue={event?.title} required autoFocus /></label><label>Date<input type="date" name="date" defaultValue={event?.date} required /></label><label>Calendar source<select name="source" defaultValue={event?.source || 'Household'}>{adults.map(adult => <option key={adult}>{adult}</option>)}<option>Household</option></select></label><label>Starts<input type="time" name="time" defaultValue={event?.time} required /></label><label>Ends<input type="time" name="end" defaultValue={event?.end} required /></label><label className="span-2">Location<input name="location" defaultValue={event?.location} /></label><label className="span-2">Preparation task<textarea name="preparation" rows="2" defaultValue={event?.preparation} placeholder="What should be ready beforehand?" /></label><label className="checkbox-label span-2"><input name="private" type="checkbox" defaultChecked={event?.private} /> Private — show only “Unavailable” to the other person</label><div className="form-actions span-2"><Button type="button" variant="outline" onClick={onClose}>Cancel</Button><Button type="submit">Save event</Button></div></form></Modal>
 }
 
-function HomeView({ data, update, setModal, notify }) {
-  const [tab, setTab] = useState('health')
-  const visibleRecs = data.recommendations.filter(r => r.status === 'suggested')
-  const [expandedRec, setExpandedRec] = useState(visibleRecs[0]?.id)
+function HomeView({ data, update, setModal, notify, navigate }) {
+  const [tab, setTab] = useState('facts')
   const [profileEdit, setProfileEdit] = useState(false)
   const [historyForm, setHistoryForm] = useState(false)
-  const acceptRec = rec => {
-    update(next => {
-      const target = next.recommendations.find(r => r.id === rec.id); if (target) target.status = 'accepted'
-      next.tasks.push({ id: uid('task'), title: rec.title, explanation: rec.why, category: 'Home', minutes: rec.effort * 15, effort: rec.effort, dueWindow: rec.timing, timing: rec.timing, setting: 'indoor', help: rec.pro.toLowerCase().includes('professional') ? 'either' : 'diy', cost: '', priority: rec.confidence.startsWith('High') ? 'should' : 'could', claimedBy: '', status: 'open', date: 'Weekend' })
-      const queued = next.recommendations.find(r => r.status === 'queued'); if (queued) queued.status = 'suggested'
-    }); notify('Added to the weekend pool')
+  const openHomeTasks = data.tasks.filter(task => task.status !== 'complete' && (task.category === 'Home' || task.sourceHistoryId))
+  const pendingHistoryActions = data.history.filter(item => item.next && !data.tasks.some(task => task.sourceHistoryId === item.id))
+  const addHistoryAction = item => {
+    update(next => next.tasks.push({ id: `home-next-${item.id}`, title: item.next, explanation: `Next action from “${item.title}”.`, category: 'Home', minutes: 15, effort: 1, dueWindow: 'This week', timing: 'Flexible', setting: 'indoor', help: 'either', cost: '', priority: 'should', claimedBy: '', status: 'open', date: 'This week', timeSensitive: false, sourceHistoryId: item.id }))
+    notify('Home action added to Plan')
   }
-  const updateRec = (id, status) => { update(next => { const rec = next.recommendations.find(r => r.id === id); if (rec) rec.status = status; const queued = next.recommendations.find(r => r.status === 'queued'); if (queued) queued.status = 'suggested' }); notify(status === 'not-applicable' ? 'Marked not applicable' : status === 'dismissed' ? 'Suggestion dismissed' : 'We’ll bring this back later') }
-  if (tab === 'health' && !visibleRecs.length) return <div className="page"><PageHeader eyebrow="Home" title="Keep only useful home facts" description="Start with information you would otherwise have to search for. Hearthline will not invent recommendations." actions={<Button icon={Plus} onClick={() => setModal({ type: 'task' })}>Add home task</Button>} /><div className="tab-bar"><button className="active">Health suggestions</button><button onClick={() => setTab('profile')}>Home profile</button><button onClick={() => setTab('history')}>History & records</button></div><EmptyState icon={Home} title="No home suggestions" text="Add a few property facts when they become useful, or keep this area empty." action={<Button variant="outline" onClick={() => setTab('profile')}>Add home facts</Button>} /></div>
-  return <div className="page"><PageHeader eyebrow="Home health" title="Know your home a little better" description="Small, explainable recommendations based on what Hearthline knows — never a surprise backlog." actions={<Button icon={Plus} onClick={() => setModal({ type: 'task' })}>Add home task</Button>} />
-    <div className="tab-bar"><button className={tab === 'health' ? 'active' : ''} onClick={() => setTab('health')}>Health suggestions</button><button className={tab === 'profile' ? 'active' : ''} onClick={() => setTab('profile')}>Home profile</button><button className={tab === 'history' ? 'active' : ''} onClick={() => setTab('history')}>History & records</button></div>
-    {tab === 'health' && <div className="home-layout"><section><div className="gentle-intro"><Leaf size={20} /><div><strong>A few timely ideas</strong><p>Hearthline introduces only a small set at once. You can accept, adjust, defer, dismiss, or say something does not apply.</p></div></div><div className="recommendation-list">{visibleRecs.map(rec => <article className="recommendation-card" key={rec.id}><button className="rec-summary" onClick={() => setExpandedRec(expandedRec === rec.id ? null : rec.id)}><span className="rec-symbol"><Wrench size={18} /></span><div><h3>{rec.title}</h3><p>{rec.timing} · Effort {rec.effort}</p></div><Chip tone={rec.confidence.startsWith('High') ? 'sage' : 'neutral'}>{rec.confidence.split(' — ')[0]} confidence</Chip>{expandedRec === rec.id ? <ChevronDown /> : <ChevronRight />}</button>{expandedRec === rec.id && <div className="rec-detail"><div className="reason-grid"><div><span>Why it may matter</span><p>{rec.why}</p></div><div><span>Why this was suggested</span><p>{rec.suggestedBecause}</p></div><div><span>Timing & effort</span><p>{rec.timing} · Effort {rec.effort} of 8</p></div><div><span>Professional help</span><p>{rec.pro}</p></div></div>{rec.confidence.includes('unknown') && <button className="dont-know" onClick={() => acceptRec({ ...rec, title: `Research: ${rec.title.toLowerCase()}` })}>I don’t know the history — make this a research task</button>}<div className="rec-actions"><Button variant="soft" onClick={() => acceptRec(rec)}>Accept</Button><Button variant="outline" onClick={() => setModal({ type: 'task', task: { title: rec.title, explanation: rec.why, category: 'Home', minutes: rec.effort * 15, effort: rec.effort, dueWindow: rec.timing, timing: rec.timing, setting: 'indoor', help: 'either', cost: '', priority: 'should', date: 'Weekend' } })}>Edit first</Button><Button variant="text" onClick={() => updateRec(rec.id, 'deferred')}>Defer</Button><Button variant="text" onClick={() => updateRec(rec.id, 'dismissed')}>Dismiss</Button><Button variant="text" onClick={() => updateRec(rec.id, 'not-applicable')}>Not applicable</Button></div></div>}</article>)}</div></section><aside className="home-sidebar"><div className="home-score"><span className="home-illustration"><Home size={34} /></span><span className="eyebrow">Household knowledge</span><h3>A solid start</h3><p>Hearthline knows the main systems and property type. Service history will improve timing.</p><div className="progress-track"><span style={{ width: '68%' }} /></div><button onClick={() => setTab('profile')}>Review home profile <ArrowRight size={15} /></button></div><div className="season-card"><span>Right now</span><strong>Late autumn in Zone 6</strong><p>Prioritize freeze readiness, gutters, chimney care, and a safe storm walk.</p></div></aside></div>}
-    {tab === 'profile' && <HomeProfile profile={data.homeProfile} editing={profileEdit} onEdit={() => setProfileEdit(true)} onCancel={() => setProfileEdit(false)} onSave={form => { update(next => { const p = next.homeProfile; ['ownership','state','year','zone','hvac','heat','acreage','notes'].forEach(k => p[k] = form.get(k)); ['basement','sumpPump','septic','garage','lawn','gutters'].forEach(k => p[k] = form.get(k) === 'on') }); setProfileEdit(false); notify('Home profile updated') }} />}
+  return <div className="page"><PageHeader eyebrow="Home memory" title="Useful facts about your home" description="Property essentials, real service records, and the next maintenance actions—nothing speculative." actions={<Button icon={Plus} onClick={() => setModal({ type: 'quick' })}>Add Plan action</Button>} />
+    <div className="tab-bar"><button className={tab === 'facts' ? 'active' : ''} onClick={() => setTab('facts')}>Essential facts</button><button className={tab === 'history' ? 'active' : ''} onClick={() => setTab('history')}>Service history</button><button className={tab === 'actions' ? 'active' : ''} onClick={() => setTab('actions')}>Next actions</button></div>
+    {tab === 'facts' && <HomeProfile profile={data.homeProfile} editing={profileEdit} onEdit={() => setProfileEdit(true)} onCancel={() => setProfileEdit(false)} onSave={form => { update(next => { const p = next.homeProfile; ['ownership','state','year','zone','hvac','heat','acreage','notes'].forEach(k => p[k] = form.get(k)); ['basement','sumpPump','septic','garage','lawn','gutters'].forEach(k => p[k] = form.get(k) === 'on') }); setProfileEdit(false); notify('Home profile updated') }} />}
     {tab === 'history' && <HistoryView history={data.history} showForm={historyForm} setShowForm={setHistoryForm} update={update} notify={notify} />}
+    {tab === 'actions' && <section className="home-actions"><div className="section-heading"><div><span className="eyebrow">Connected to Plan</span><h2>Next maintenance actions</h2><p>Add a recorded next step to Plan only when it is useful.</p></div></div>{pendingHistoryActions.map(item => <article key={item.id}><span className="entry-icon"><Wrench size={17} /></span><div><strong>{item.next}</strong><small>From {item.title}{item.date ? ` · ${shortDate(item.date)}` : ''}</small></div><Button variant="outline" onClick={() => addHistoryAction(item)}>Add to Plan</Button></article>)}{openHomeTasks.map(task => <article key={task.id}><span className="entry-icon"><Wrench size={15} /></span><div><strong>{task.title}</strong><small>{task.date || task.dueWindow} · In Plan</small></div><Button variant="text" onClick={() => navigate('plan')}>Open Plan</Button></article>)}{!pendingHistoryActions.length && !openHomeTasks.length && <EmptyState icon={Wrench} title="No maintenance actions waiting" text="A next step from a real service record can be added here when needed." />}</section>}
   </div>
 }
 
@@ -414,7 +465,7 @@ function HomeProfile({ profile, editing, onEdit, onCancel, onSave }) {
   const hasFacts = Object.values(profile).some(Boolean)
   if (editing) return <form className="profile-form card" onSubmit={e => { e.preventDefault(); onSave(new FormData(e.currentTarget)) }}><div className="section-heading"><div><span className="eyebrow">Editable profile</span><h2>About the house</h2></div></div><div className="form-grid"><label>Ownership<input name="ownership" defaultValue={profile.ownership} /></label><label>State or region<input name="state" defaultValue={profile.state} /><small>No street address needed.</small></label><label>Year built<input name="year" defaultValue={profile.year} /></label><label>Growing zone<input name="zone" defaultValue={profile.zone} /></label><label>Heating & cooling<input name="hvac" defaultValue={profile.hvac} /></label><label>Additional heat<input name="heat" defaultValue={profile.heat} /></label><label className="span-2">Property<input name="acreage" defaultValue={profile.acreage} /></label><fieldset className="span-2"><legend>Systems and spaces</legend><div className="system-checks">{systems.map(([label, key]) => <label className="checkbox-label" key={key}><input type="checkbox" name={key} defaultChecked={profile[key]} />{label}</label>)}</div></fieldset><label className="span-2">Notes<textarea rows="3" name="notes" defaultValue={profile.notes} placeholder="Anything else worth remembering?" /></label><div className="form-actions span-2"><Button type="button" variant="outline" onClick={onCancel}>Cancel</Button><Button type="submit">Save profile</Button></div></div></form>
   if (!hasFacts) return <div className="profile-card card"><EmptyState icon={Home} title="No home facts yet" text="Add only details that prevent repeated searching or support a real reminder." action={<Button variant="outline" icon={Edit3} onClick={onEdit}>Add useful facts</Button>} /></div>
-  return <div className="profile-card card"><div className="section-heading"><div><span className="eyebrow">Home profile</span><h2>{[profile.year, profile.ownership].filter(Boolean).join(' ') || 'Household facts'}</h2><p>{[profile.state, profile.zone].filter(Boolean).join(' · ')}</p></div><Button variant="outline" icon={Edit3} onClick={onEdit}>Edit profile</Button></div><div className="profile-facts"><div><span>Climate & land</span><strong>{profile.acreage || 'Not recorded'}</strong><p>{profile.zone}</p></div><div><span>Core systems</span><strong>{profile.hvac || 'Not recorded'}</strong><p>{profile.heat}</p></div><div><span>Foundation & water</span><strong>{profile.basement ? 'Basement' : 'No basement recorded'}</strong><p>{profile.sumpPump ? 'Sump pump' : 'No sump pump recorded'} · {profile.septic ? 'Septic' : 'Sewer not recorded'}</p></div></div><div className="system-pills">{[['Garage',profile.garage],['Lawn',profile.lawn],['Gutters',profile.gutters],['Septic',profile.septic],['Sump pump',profile.sumpPump]].filter(([,v]) => v).map(([label]) => <Chip tone="sage" key={label}><Check size={13} /> {label}</Chip>)}</div><div className="privacy-note"><ShieldCheck size={18} /><p><strong>Privacy by design.</strong> Hearthline does not need a precise street address for these recommendations.</p></div></div>
+  return <div className="profile-card card"><div className="section-heading"><div><span className="eyebrow">Home profile</span><h2>{[profile.year, profile.ownership].filter(Boolean).join(' ') || 'Household facts'}</h2><p>{[profile.state, profile.zone].filter(Boolean).join(' · ')}</p></div><Button variant="outline" icon={Edit3} onClick={onEdit}>Edit profile</Button></div><div className="profile-facts"><div><span>Climate & land</span><strong>{profile.acreage || 'Not recorded'}</strong><p>{profile.zone}</p></div><div><span>Core systems</span><strong>{profile.hvac || 'Not recorded'}</strong><p>{profile.heat}</p></div><div><span>Foundation & water</span><strong>{profile.basement ? 'Basement' : 'No basement recorded'}</strong><p>{profile.sumpPump ? 'Sump pump' : 'No sump pump recorded'} · {profile.septic ? 'Septic' : 'Sewer not recorded'}</p></div></div><div className="system-pills">{[['Garage',profile.garage],['Lawn',profile.lawn],['Gutters',profile.gutters],['Septic',profile.septic],['Sump pump',profile.sumpPump]].filter(([,v]) => v).map(([label]) => <Chip tone="sage" key={label}><Check size={13} /> {label}</Chip>)}</div><div className="privacy-note"><ShieldCheck size={18} /><p><strong>Privacy by design.</strong> Hearthline keeps only the facts you choose and does not need a precise street address.</p></div></div>
 }
 
 function HistoryView({ history, showForm, setShowForm, update, notify }) {
@@ -432,6 +483,7 @@ function PetsView({ data, update, notify }) {
   const [editing, setEditing] = useState(false)
   const [adding, setAdding] = useState(false)
   const pet = data.pets.find(p => p.id === selected) || data.pets[0]
+  const recentConfirmations = (data.routines.confirmations || []).filter(item => item.petId === pet?.id || item.pet === pet?.name).slice(-5).reverse()
   const addPet = form => {
     const id = uid('pet'); const name = String(form.get('name')).trim(); const species = String(form.get('species')).trim() || 'Pet'
     update(next => {
@@ -448,8 +500,9 @@ function PetsView({ data, update, notify }) {
     {adding && <PetCreateForm onCancel={() => setAdding(false)} onSave={addPet} />}
     <div className="pet-tabs">{data.pets.map(p => <button key={p.id} className={selected === p.id ? 'active' : ''} onClick={() => { setSelected(p.id); setEditing(false) }}><span className={`pet-avatar ${p.color}`}>{p.initials}</span><div><strong>{p.name}</strong><small>{p.species}</small></div></button>)}</div>
     <div className="pet-profile"><aside className={`pet-portrait ${pet.color}`}><div className="pet-silhouette">{pet.species === 'Dog' ? <Dog size={88} strokeWidth={1.2} /> : <PawPrint size={76} strokeWidth={1.2} />}</div><div><h2>{pet.name}</h2><p>{pet.species}</p></div><Button variant="light" icon={Edit3} onClick={() => setEditing(true)}>Edit profile</Button></aside>
-      {editing ? <form className="pet-content" onSubmit={save}><div className="form-grid"><label>Name<input name="name" defaultValue={pet.name} required /></label><label>Species<input name="species" defaultValue={pet.species} /></label><label className="span-2">Medication schedule<input name="medication" defaultValue={pet.medication} /></label><label>Veterinarian<input name="vet" defaultValue={pet.vet} /></label><label>Vet phone<input name="vetPhone" defaultValue={pet.vetPhone} /></label><label className="span-2">Care notes<textarea name="notes" defaultValue={pet.notes} rows="3" /></label><label>Upcoming appointments<input name="appointment" defaultValue={pet.appointment} /></label><label>Supply reminders<input name="supplies" defaultValue={pet.supplies} /></label><div className="form-actions span-2"><Button type="button" variant="outline" onClick={() => setEditing(false)}>Cancel</Button><Button type="submit">Save profile</Button></div></div></form> : <div className="pet-content"><section className="pet-highlight"><span className="pet-highlight-icon"><HeartPulse /></span><div><span className="eyebrow">Medication</span><h3>{pet.medication}</h3><p>{pet.medication.includes('No current') ? 'No medication confirmation needed.' : 'Morning and evening doses appear in Today.'}</p></div></section><div className="pet-info-grid"><section><span className="mini-icon"><ClipboardList /></span><div><span>Care notes</span><p>{pet.notes}</p></div></section><section><span className="mini-icon"><CalendarDays /></span><div><span>Upcoming appointment</span><p>{pet.appointment}</p></div></section><section><span className="mini-icon"><Archive /></span><div><span>Supply reminder</span><p>{pet.supplies}</p></div></section><section><span className="mini-icon"><HeartPulse /></span><div><span>Veterinarian</span><p>{pet.vet}<br />{pet.vetPhone}</p></div></section></div></div>}
+      {editing ? <form className="pet-content" onSubmit={save}><div className="form-grid"><label>Name<input name="name" defaultValue={pet.name} required /></label><label>Species<input name="species" defaultValue={pet.species} /></label><label className="span-2">Medication schedule<input name="medication" defaultValue={pet.medication} /></label><label>Veterinarian<input name="vet" defaultValue={pet.vet} /></label><label>Vet phone<input name="vetPhone" defaultValue={pet.vetPhone} /></label><label className="span-2">Care notes<textarea name="notes" defaultValue={pet.notes} rows="3" /></label><label>Upcoming appointments<input name="appointment" defaultValue={pet.appointment} /></label><label>Supply reminders<input name="supplies" defaultValue={pet.supplies} /></label><div className="form-actions span-2"><Button type="button" variant="outline" onClick={() => setEditing(false)}>Cancel</Button><Button type="submit">Save profile</Button></div></div></form> : <div className="pet-content"><section className="pet-highlight"><span className="pet-highlight-icon"><HeartPulse /></span><div><span className="eyebrow">Medication</span><h3>{pet.medication}</h3><p>{pet.medication.includes('No current') ? 'No medication confirmation needed.' : 'Due doses appear in Today and require a person to confirm them.'}</p></div></section><div className="pet-info-grid"><section><span className="mini-icon"><ClipboardList /></span><div><span>Care notes</span><p>{pet.notes}</p></div></section><section><span className="mini-icon"><CalendarDays /></span><div><span>Upcoming appointment</span><p>{pet.appointment}</p></div></section><section><span className="mini-icon"><Archive /></span><div><span>Supply reminder</span><p>{pet.supplies}</p></div></section><section><span className="mini-icon"><HeartPulse /></span><div><span>Veterinarian</span><p>{pet.vet}<br />{pet.vetPhone}</p></div></section></div></div>}
     </div>
+    {recentConfirmations.length > 0 && <section className="real-care-log card"><div className="section-heading"><div><span className="eyebrow">Confirmed care</span><h2>Recent real confirmations</h2><p>Only actions someone actually confirmed appear here.</p></div></div>{recentConfirmations.map(item => <div key={item.id}><CheckCircle2 size={17} /><span><strong>{item.action}</strong><small>{shortDate(item.date)} · {item.confirmedBy || 'Household member'}</small></span></div>)}</section>}
   </div>
 }
 
@@ -466,72 +519,43 @@ function GoalModal({ goal, onClose, onSave }) {
   return <Modal title={goal ? 'Edit goal' : 'Add a shared goal'} onClose={onClose}><form className="form-grid" onSubmit={submit}><label className="span-2">Goal name<input name="title" defaultValue={goal?.title} required autoFocus /></label><label className="span-2">What are you hoping to change?<textarea name="description" defaultValue={goal?.description} rows="3" required /></label><label>Progress<input type="number" name="progress" min="0" max="100" defaultValue={goal?.progress || 0} /></label><label>Suggested next action<input name="next" defaultValue={goal?.next} required /></label><div className="form-actions span-2"><Button type="button" variant="outline" onClick={onClose}>Cancel</Button><Button type="submit">Save goal</Button></div></form></Modal>
 }
 
-function InboxView({ data, update, notify, navigate }) {
-  const [draft, setDraft] = useState('')
-  const [listening, setListening] = useState(false)
-  const [speechMessage, setSpeechMessage] = useState('')
-  const [review, setReview] = useState(null)
-  const recognitionRef = useRef(null)
-  const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition
-  const classify = text => {
-    const lower = text.toLowerCase()
-    const pet = ['cat','dog','pet','medication','vet'].some(w => lower.includes(w))
-    const event = ['appointment','meeting','visit'].some(w => lower.includes(w))
-    const goal = ['we should','improve','project','organize'].some(w => lower.includes(w))
-    return { type: event ? 'Calendar event' : pet ? 'Pet task' : goal ? 'Possible goal' : 'Home task', category: pet ? 'Pets' : event ? 'Calendar' : goal ? 'Goals' : 'Home', timing: lower.includes('next month') ? 'Next month' : lower.includes('today') ? 'Today' : 'This weekend', effort: lower.includes('inspect') || lower.includes('strange') ? 2 : 1, destination: event ? 'Calendar' : pet ? 'Pets' : goal ? 'Goals' : 'Home' }
-  }
-  const startSpeech = () => {
-    if (!SpeechRecognition) { setSpeechMessage('Speech recognition is not available in this browser. Typed capture still works.'); return }
-    try {
-      const recognition = new SpeechRecognition(); recognition.continuous = false; recognition.interimResults = true; recognition.lang = 'en-US'; recognitionRef.current = recognition
-      recognition.onstart = () => { setListening(true); setSpeechMessage('Listening…') }
-      recognition.onresult = event => { const transcript = [...event.results].map(r => r[0].transcript).join(''); setDraft(transcript); setSpeechMessage(event.results[event.results.length - 1].isFinal ? 'Transcript ready — edit anything before saving.' : 'Listening…') }
-      recognition.onerror = () => { setListening(false); setSpeechMessage('Microphone access was unavailable. You can keep typing instead.') }
-      recognition.onend = () => setListening(false)
-      recognition.start()
-    } catch { setSpeechMessage('Speech recognition could not start. You can keep typing instead.') }
-  }
-  const stage = () => { if (!draft.trim()) return; setReview({ id: uid('inbox'), text: draft.trim(), created: 'Just now', suggestion: classify(draft), status: 'unorganized' }) }
-  const saveInbox = () => { update(next => next.inbox.unshift(review)); setDraft(''); setReview(null); notify('Saved to the household inbox') }
-  const confirmOrganize = item => {
-    update(next => {
-      const found = next.inbox.find(i => i.id === item.id)
-      if (found) found.status = 'organized'
-      const destination = item.suggestion.destination
-      if (destination === 'Calendar') {
-        const date = new Date()
-        if (item.suggestion.timing.toLowerCase().includes('next month')) date.setMonth(date.getMonth() + 1)
-        next.events.push({ id: uid('event'), title: item.text, date: date.toISOString().slice(0, 10), time: '09:00', end: '10:00', source: 'Household', private: false, location: '', preparation: '' })
-      } else if (destination === 'Goals') {
-        next.goals.push({ id: uid('goal'), title: item.text, description: 'Captured from the household inbox.', progress: 0, next: 'Choose a small first step', status: 'active' })
-      } else {
-        next.tasks.push({ id: uid('task'), title: item.text, explanation: 'Captured from the household inbox.', category: item.suggestion.category, minutes: item.suggestion.effort * 15, effort: item.suggestion.effort, dueWindow: item.suggestion.timing, timing: 'Flexible', setting: 'indoor', help: 'diy', cost: '', priority: 'should', claimedBy: '', status: 'open', date: destination === 'Today' || item.suggestion.timing === 'Today' ? 'Today' : 'Weekend' })
-      }
-    })
-    notify(`Organized into ${item.suggestion.destination}`)
-  }
-  return <div className="page"><PageHeader eyebrow="Quick capture" title="Get it out of your head" description="Capture the rough thought now. Hearthline will suggest where it might belong, and wait for your confirmation." />
-    <section className="capture-card"><div className="capture-input"><textarea value={draft} onChange={e => setDraft(e.target.value)} placeholder="Try “Pick up a refill” or “The garage door sounds strange.”" rows="4" /><button className={`mic-button ${listening ? 'listening' : ''}`} onClick={listening ? () => recognitionRef.current?.stop() : startSpeech} aria-label={listening ? 'Stop listening' : 'Start voice capture'}>{listening ? <MicOff /> : <Mic />}</button></div>{speechMessage && <p className="speech-status">{listening && <span />} {speechMessage}</p>}<div className="capture-footer"><small>{SpeechRecognition ? 'Voice capture is supported in this browser.' : 'Voice capture is unavailable here; typing works normally.'}</small><Button onClick={stage} disabled={!draft.trim()}>Review capture</Button></div></section>
-    {review && <section className="review-capture"><div className="section-heading"><div><span className="eyebrow">Review before saving</span><h2>Does this look right?</h2></div><IconButton label="Close review" onClick={() => setReview(null)}><X size={20} /></IconButton></div><textarea value={review.text} onChange={e => { const text = e.target.value; setReview({ ...review, text, suggestion: classify(text) }) }} rows="2" /><SuggestionEditor item={review} onChange={suggestion => setReview({ ...review, suggestion })} /><div className="form-actions"><Button variant="outline" onClick={() => setReview(null)}>Keep editing</Button><Button onClick={saveInbox}>Confirm & save to inbox</Button></div></section>}
-    <section className="inbox-section"><div className="section-heading"><div><span className="eyebrow">Unsorted thoughts</span><h2>Household inbox</h2></div></div><div className="inbox-list">{data.inbox.map(item => <article className={item.status === 'organized' ? 'organized' : ''} key={item.id}><span className="inbox-status">{item.status === 'organized' ? <Check /> : <Inbox />}</span><div><h3>{item.text}</h3><p>{item.status === 'organized' ? `Organized into ${item.suggestion.destination}` : 'Waiting for your confirmation'}</p>{item.status !== 'organized' && <SuggestionEditor item={item} onChange={suggestion => update(next => { const target = next.inbox.find(i => i.id === item.id); if (target) target.suggestion = suggestion })} />}</div><div className="inbox-actions">{item.status !== 'organized' && <Button variant="soft" onClick={() => confirmOrganize(item)}>Confirm & organize</Button>}<IconButton label="Delete capture" onClick={() => update(next => { next.inbox = next.inbox.filter(i => i.id !== item.id) })}><Trash2 size={18} /></IconButton></div></article>)}</div></section>
-  </div>
+function ScopeReview({ review, onSave }) {
+  const saved = review || {}
+  const functions = ['Today', 'Plan', 'Pets', 'Home', 'Quick Add']
+  const start = saved.start || new Date().toISOString().slice(0, 10)
+  const target = new Date(`${start}T12:00:00`); target.setDate(target.getDate() + 14)
+  return <section className="settings-card scope-review"><div className="settings-heading"><span><ClipboardList /></span><div><h2>Two-week scope review</h2><p>Record actual use before adding anything else. Review together around {shortDate(target.toISOString().slice(0, 10))}.</p></div></div><form className="form-grid" onSubmit={event => { event.preventDefault(); const form = new FormData(event.currentTarget); onSave({ start: form.get('start'), usedWeekly: form.getAll('usedWeekly'), ignored: form.get('ignored'), missing: form.get('missing'), friction: form.get('friction'), experiment: form.get('experiment') }) }}>
+    <label className="span-2">Review started<input type="date" name="start" defaultValue={start} /></label>
+    <fieldset className="span-2"><legend>Functions used weekly</legend><div className="review-checks">{functions.map(item => <label className="checkbox-label" key={item}><input type="checkbox" name="usedWeekly" value={item} defaultChecked={saved.usedWeekly?.includes(item)} />{item}</label>)}</div></fieldset>
+    <label>Functions ignored<textarea name="ignored" rows="3" defaultValue={saved.ignored} placeholder="What did neither person use?" /></label>
+    <label>Repeated missing actions<textarea name="missing" rows="3" defaultValue={saved.missing} placeholder="What did you repeatedly wish was faster?" /></label>
+    <label className="span-2">Daily-loop friction<textarea name="friction" rows="3" defaultValue={saved.friction} placeholder="Where did seeing or completing the next action feel awkward?" /></label>
+    <label className="span-2">One possible next experiment<input name="experiment" defaultValue={saved.experiment} placeholder="At most one—leave blank if the core is enough" /></label>
+    <div className="form-actions span-2"><Button type="submit">Save review notes</Button></div>
+  </form></section>
 }
 
-function SuggestionEditor({ item, onChange }) {
-  const s = item.suggestion
-  const set = (key, value) => onChange({ ...s, [key]: key === 'effort' ? Number(value) : value })
-  return <div className="suggestion-grid"><label>Type<select value={s.type} onChange={e => set('type', e.target.value)}><option>Home task</option><option>Pet task</option><option>Calendar event</option><option>Possible goal</option><option>Note</option></select></label><label>Category<input value={s.category} onChange={e => set('category', e.target.value)} /></label><label>Timing<input value={s.timing} onChange={e => set('timing', e.target.value)} /></label><label>Effort<select value={s.effort} onChange={e => set('effort', e.target.value)}>{effortOptions.map(n => <option key={n}>{n}</option>)}</select></label><label>Destination<select value={s.destination} onChange={e => set('destination', e.target.value)}><option>Today</option><option>Weekend</option><option>Calendar</option><option>Home</option><option>Pets</option><option>Goals</option></select></label></div>
-}
-
-function SettingsView({ data, update, notify, cloud }) {
+function SettingsView({ data, update, notify, cloud, installPrompt, installApp }) {
   const [confirmReset, setConfirmReset] = useState(false)
   const savePeople = e => { e.preventDefault(); const f = new FormData(e.currentTarget); update(next => { const old = [...next.adults]; next.brandName = f.get('brandName') || 'Hearthline'; next.adults = [f.get('adult1') || 'You', f.get('adult2') || 'Household partner']; next.capacity[next.adults[0]] = next.capacity[old[0]] || { level: 'moderate', unavailable: '', note: '' }; next.capacity[next.adults[1]] = next.capacity[old[1]] || { level: 'moderate', unavailable: '', note: '' }; if (old[0] !== next.adults[0]) delete next.capacity[old[0]]; if (old[1] !== next.adults[1]) delete next.capacity[old[1]] }); notify('Household settings saved') }
   const reset = () => { localStorage.removeItem(HOUSEHOLD_CACHE_KEY); window.location.reload() }
   const copyInvite = async () => { await navigator.clipboard.writeText(cloud.household.invite_code); notify('Invite code copied') }
+  const exportData = () => {
+    const anchor = document.createElement('a')
+    anchor.href = `data:application/json;charset=utf-8,${encodeURIComponent(JSON.stringify({ exportedAt: new Date().toISOString(), hearthline: data }, null, 2))}`
+    anchor.download = `hearthline-backup-${new Date().toISOString().slice(0, 10)}.json`
+    document.body.appendChild(anchor)
+    anchor.click()
+    anchor.remove()
+    notify('Household backup downloaded')
+  }
+  const saveReview = review => { update(next => { next.settings.scopeReview = review }); notify('Scope review saved') }
   return <div className="page settings-page"><PageHeader eyebrow="Settings" title="Make Hearthline yours" description={cloud ? 'Adjust the household and shared access.' : 'Adjust the household and local data.'} />
     <div className="settings-layout"><section className="settings-card"><div className="settings-heading"><span><Users /></span><div><h2>Household & app name</h2><p>The product name is provisional and can change whenever you like.</p></div></div><form className="form-grid" onSubmit={savePeople}><label className="span-2">App name<input name="brandName" defaultValue={data.brandName} /></label><label>First adult<input name="adult1" defaultValue={data.adults[0]} /></label><label>Second adult<input name="adult2" defaultValue={data.adults[1]} /></label><div className="form-actions span-2"><Button type="submit">Save names</Button></div></form></section>
       {cloud && <section className="settings-card cloud-account"><div className="settings-heading"><span><Users /></span><div><h2>Shared household access</h2><p>Each adult has a private account and shares the same live household.</p></div><Chip tone="sage">{cloud.status === 'saved' ? 'Saved' : cloud.status === 'offline' ? 'Offline' : titleCase(cloud.status)}</Chip></div><div className="cloud-details"><div><span>Household</span><strong>{cloud.household.name}</strong></div><div><span>Signed in as</span><strong>{cloud.user.email}</strong></div><div className="invite-code"><span>Invite the other person</span><strong>{cloud.household.invite_code}</strong><small>Share this code privately. It grants access after the second account is created.</small></div></div><div className="form-actions"><Button variant="outline" onClick={copyInvite}>Copy invite code</Button><Button variant="text" onClick={cloud.signOut}>Sign out</Button></div></section>}
-      <section className="settings-card"><div className="settings-heading"><span><ShieldCheck /></span><div><h2>Storage & privacy</h2><p>{cloud ? 'Household records stay in the shared service. This browser keeps only your sign-in and any unsaved offline changes.' : 'This version stores household information only in this browser.'}</p></div></div>{cloud && <div className="trusted-device-note"><ShieldCheck size={17} /><span>Stay signed in only on a trusted device. Signing out clears the session, household cache, and queued changes from this browser.</span></div>}<div className="setting-row"><div><strong>Gentle reminders</strong><p>Use calm language and avoid intimidating backlog counts.</p></div><label className="switch"><input type="checkbox" aria-label="Gentle reminders" checked={data.settings.gentleReminders} onChange={e => update(next => { next.settings.gentleReminders = e.target.checked })} /><span aria-hidden="true" /></label></div><div className="setting-row"><div><strong>Local starter data</strong><p>Clear this device and return to an empty starter household.</p></div>{confirmReset ? <div className="reset-confirm"><Button variant="danger" onClick={reset}>Yes, reset</Button><Button variant="text" onClick={() => setConfirmReset(false)}>Cancel</Button></div> : <Button variant="outline" onClick={() => setConfirmReset(true)}>Reset local data</Button>}</div></section>
+      <section className="settings-card"><div className="settings-heading"><span><Smartphone /></span><div><h2>Install & updates</h2><p>Use Hearthline like an app without installing anything from an app store.</p></div></div><div className="recovery-list"><div><strong>Add to your phone</strong><p>{installPrompt ? 'This browser can install Hearthline now.' : 'On iPhone, use Share → Add to Home Screen. On Android or desktop, use the browser menu → Install app.'}</p>{installPrompt && <Button variant="outline" icon={Smartphone} onClick={async () => { if (await installApp()) notify('Hearthline installed') }}>Install Hearthline</Button>}</div><div><strong>Updates</strong><p>Hearthline checks for updates automatically and asks before refreshing, so queued offline work is not discarded.</p></div><div><strong>Offline recovery</strong><p>Keep this tab or installed app on the device. Changes made offline wait here and save after reconnection. If sync says Needs attention, review before choosing which version to keep.</p></div></div></section>
+      <section className="settings-card"><div className="settings-heading"><span><ShieldCheck /></span><div><h2>Storage, recovery & privacy</h2><p>{cloud ? 'Household records stay in the shared service. This browser keeps only your sign-in and deliberately queued offline changes.' : 'This version stores household information only in this browser.'}</p></div></div>{cloud && <div className="trusted-device-note"><ShieldCheck size={17} /><span>Stay signed in only on a trusted device. Signing out clears the session, household cache, and queued changes from this browser.</span></div>}<div className="setting-row"><div><strong>Download a backup</strong><p>Export a readable JSON copy of the household’s current facts, tasks, care confirmations, and records.</p></div><Button variant="outline" icon={Download} onClick={exportData}>Export household</Button></div><div className="setting-row"><div><strong>Local starter data</strong><p>Clear this device and return to an empty starter household.</p></div>{confirmReset ? <div className="reset-confirm"><Button variant="danger" onClick={reset}>Yes, reset</Button><Button variant="text" onClick={() => setConfirmReset(false)}>Cancel</Button></div> : <Button variant="outline" onClick={() => setConfirmReset(true)}>Reset local data</Button>}</div></section>
+      <ScopeReview review={data.settings.scopeReview} onSave={saveReview} />
     </div>
   </div>
 }
