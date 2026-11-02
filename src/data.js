@@ -15,6 +15,7 @@ export function seededData(options = {}) {
     initials: initialsFor(name),
     color: colors[index % colors.length],
     medication: 'No current medication',
+    medicationFrequency: 'daily',
     vet: '',
     vetPhone: '',
     notes: '',

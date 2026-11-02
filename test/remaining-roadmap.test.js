@@ -8,7 +8,7 @@ const noon = value => new Date(`${value}T12:00:00`)
 
 test('a due medication appears once, records who confirmed it, and returns on the next day', () => {
   const data = {
-    pets: [{ id: 'pet-1', name: 'Milo', medication: 'Heart tablet', supplies: 'No supply reminder', appointment: 'No appointment scheduled' }],
+    pets: [{ id: 'pet-1', name: 'Milo', medication: 'Heart tablet', medicationFrequency: 'daily', supplies: 'No supply reminder', appointment: 'No appointment scheduled' }],
     tasks: [],
     routines: { confirmations: [] },
   }
@@ -20,6 +20,14 @@ test('a due medication appears once, records who confirmed it, and returns on th
   assert.equal(retried.confirmations[0].confirmedBy, 'Chris')
   assert.equal(buildDuePetCare({ ...data, routines: retried }, noon('2026-11-02')).length, 0)
   assert.equal(buildDuePetCare({ ...data, routines: retried }, noon('2026-11-03')).length, 1)
+})
+
+test('legacy medication text is never used to guess dose frequency', () => {
+  const data = { pets: [{ id: 'pet-1', name: 'Milo', medication: 'Tablet at 8', supplies: 'Order tablets', appointment: 'No appointment scheduled' }], tasks: [], routines: { confirmations: [] } }
+  const due = buildDuePetCare(data, noon('2026-11-02'))
+  assert.equal(due.filter(item => item.type === 'medication').length, 0)
+  assert.equal(due.filter(item => item.type === 'medication-review').length, 1)
+  assert.equal(due.filter(item => item.type === 'supply').length, 1)
 })
 
 test('routine care resets for a new day and confirmation records the household member', () => {

@@ -178,10 +178,14 @@ export function buildDuePetCare(data, now = new Date()) {
   for (const pet of data.pets || []) {
     const medication = String(pet.medication || '').trim()
     if (medication && !/^no current medication$/i.test(medication)) {
-      const slots = /morning.*evening|evening.*morning|twice/i.test(medication) ? ['morning', 'evening'] : ['daily']
-      for (const slot of slots) {
-        const confirmation = confirmationId('medication', [pet.id, slot], dateKey)
-        if (!confirmations.has(confirmation)) items.push({ id: confirmation, type: 'medication', petId: pet.id, pet: pet.name, title: medication, detail: slot === 'daily' ? 'Due today' : `${slot[0].toUpperCase()}${slot.slice(1)} dose`, slot })
+      if (!['daily', 'morning-evening'].includes(pet.medicationFrequency)) {
+        items.push({ id: `medication-review:${pet.id}`, type: 'medication-review', petId: pet.id, pet: pet.name, title: medication, detail: 'Review the dose frequency in Pets' })
+      } else {
+        const slots = pet.medicationFrequency === 'morning-evening' ? ['morning', 'evening'] : ['daily']
+        for (const slot of slots) {
+          const confirmation = confirmationId('medication', [pet.id, slot], dateKey)
+          if (!confirmations.has(confirmation)) items.push({ id: confirmation, type: 'medication', petId: pet.id, pet: pet.name, title: medication, detail: slot === 'daily' ? 'Due today' : `${slot[0].toUpperCase()}${slot.slice(1)} dose`, slot })
+        }
       }
     }
     const supplies = String(pet.supplies || '').trim()
